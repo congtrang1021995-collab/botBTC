@@ -34,15 +34,18 @@ const fmtDate = s => s.split('-').reverse().join('/');
 const fallbackStart = tf => TFS[tf].start || new Date(Date.now() - TFS[tf].days * 864e5).toISOString().slice(0, 10);
 
 // ---- lưu trữ trong trình duyệt (IndexedDB) — lỗi/không có thì chạy như bình thường ----
+// Đổi cấu trúc thì đổi TÊN cơ sở dữ liệu (không nâng version): nâng version bị chặn mãi nếu
+// một tab/trang cũ còn giữ kết nối. Mở quá 2,5 giây thì bỏ qua bản lưu, trang vẫn chạy.
 const store = (() => {
   let dbp = null;
+  try { indexedDB.deleteDatabase('bot2-live'); } catch(e) {}   // bản lưu kiểu cũ (danh sách nến)
   const open = () => dbp || (dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('bot2-live', 2);
-    r.onupgradeneeded = () => {   // v2: lưu trạng thái Bot2 thay cho danh sách nến
-      if (r.result.objectStoreNames.contains('tf')) r.result.deleteObjectStore('tf');
-      r.result.createObjectStore('tf');
-    };
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    const r = indexedDB.open('bot2-live-ckpt', 1);
+    const timer = setTimeout(() => rej(new Error('IndexedDB bận')), 2500);
+    r.onupgradeneeded = () => r.result.createObjectStore('tf');
+    r.onsuccess = () => { clearTimeout(timer); r.result.onversionchange = () => r.result.close(); res(r.result); };
+    r.onerror = () => { clearTimeout(timer); rej(r.error); };
+    r.onblocked = () => { clearTimeout(timer); rej(new Error('IndexedDB bị chặn')); };
   }));
   const tx = async (mode, fn) => { const db = await open(); return new Promise((res, rej) => {
     const t = db.transaction('tf', mode), req = fn(t.objectStore('tf'));
