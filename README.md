@@ -46,7 +46,10 @@ server. Trình duyệt người xem tự tải nến Binance Futures, chạy ch�
 Pyodide (`web/worker.js`) và nhận giá realtime qua WebSocket; nến đóng thì Bot2 tính lại. Mỗi
 lần push lên `main`, GitHub Actions chạy test, dựng `_site/` bằng `web/build_site.py` rồi
 đăng lên Pages, nên sửa rule xong push là trang dùng rule mới. Nút **Khung** (5p / 15p /
-1h / 4h / Ngày) chạy Bot2 trên chính khung đó. Lịch sử mặc định: 30 ngày cho 5p, 90 ngày cho
+1h / 4h / Ngày) đổi khung ngay trong trang và chạy Bot2 trên chính khung đó. Nến và kết quả
+Bot2 của từng khung được lưu trong IndexedDB của trình duyệt: mở lại thì chart hiện ngay từ bản
+lưu, chỉ tải các nến mới và Bot2 chỉ tính thêm các nến đó. Engine đang chạy được giữ trong worker
+cho 3 khung gần nhất. Nếu code Bot2 đổi, trang giữ nến đã lưu và chỉ chạy lại Bot2. Lịch sử mặc định: 30 ngày cho 5p, 90 ngày cho
 15p, từ 2025 cho 1h, từ 2022 cho 4h và từ đầu cho Ngày. Tham số URL tùy chọn:
 `?symbol=ETHUSDT&interval=4h&market=spot&start=2025-06-01`. Người xem cần truy cập được
 Binance (bị chặn ở Mỹ). Xem thử trên máy: `python web/build_site.py` rồi

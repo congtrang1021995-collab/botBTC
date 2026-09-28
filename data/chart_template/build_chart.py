@@ -26,7 +26,11 @@ WORKSPACE = HERE.parents[1]
 sys.path.insert(0, str(WORKSPACE))
 
 from trading_bot.backtest.csv_loader import load_bars_csv  # noqa: E402
-from trading_bot.backtest.runner import run_backtest_report  # noqa: E402
+from trading_bot.backtest.metrics import (  # noqa: E402
+    calculate_trade_metrics,
+    extract_closed_trades,
+)
+from trading_bot.backtest.runner import BacktestReport, run_backtest_report  # noqa: E402
 from trading_bot.core.models import Bar, PositionSide  # noqa: E402
 
 TEMPLATE = HERE / "template.html"
@@ -65,8 +69,15 @@ def r2(value: float | None) -> float | None:
     return None if value is None else round(value, 2)
 
 
-def build_payload(bars: list[Bar]) -> dict:
-    report = run_backtest_report(bars)
+def build_payload(bars: list[Bar], results: list | None = None) -> dict:
+    """Dựng dữ liệu chart. Truyền sẵn ``results`` (từ engine đã chạy nối tiếp) để khỏi
+    chạy lại backtest từ đầu — trang live dùng cách này khi chỉ có vài nến mới."""
+    if results is None:
+        report = run_backtest_report(bars)
+    else:
+        trades = extract_closed_trades(results)
+        report = BacktestReport(results=tuple(results), trades=tuple(trades),
+                                trade_metrics=calculate_trade_metrics(trades))
     results = report.results
 
     def active_stops(side: PositionSide, entry: int, exit_: int, initial: float) -> list[float]:

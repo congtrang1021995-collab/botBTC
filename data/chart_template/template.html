@@ -174,7 +174,7 @@ try{const s=localStorage.getItem('trade-chart-tz'); if(s==='0'||s==='7') tz=+s;}
 const pad = n => String(n).padStart(2,'0');
 const dt = s => new Date((s + tz*3600)*1000);
 // Độ dài 1 nến (giây): payload có "iv" thì dùng, không thì suy từ hai nến đầu (mặc định H1).
-const IVS = D.iv || (t.length>1 ? t[1]-t[0] : 3600);
+let IVS = D.iv || (t.length>1 ? t[1]-t[0] : 3600);
 const hm = d => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 const fmtFull = s => {const d=dt(s);return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}/${d.getUTCFullYear()}`+(IVS>=86400?'':` ${hm(d)}`);};
 const fmtShort = s => {const d=dt(s);return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}/${String(d.getUTCFullYear()).slice(2)}`+(IVS>=86400?'':IVS>=3600?` ${pad(d.getUTCHours())}h`:` ${hm(d)}`);};
@@ -427,23 +427,29 @@ select(closedList[closedList.length-1]);
 
 // API cho chế độ live (live_server.py): thay dữ liệu tại chỗ, giữ khung nhìn và lệnh đang chọn.
 window.TradeChart = {
-  update(nd){
-    const oldN=N, keep=selected?{ei:selected.ei,side:selected.side}:null;
+  // opts.reset: đổi sang khung khác -> bỏ nến đang chạy, bỏ lệnh đang chọn, về lệnh gần nhất.
+  update(nd,opts={}){
+    const reset=!!opts.reset, oldN=N, keep=!reset&&selected?{ei:selected.ei,side:selected.side}:null;
     const ts=chart.timeScale(), range=ts.getVisibleLogicalRange();
     for(const k of ['t','o','h','l','c','e34','e89']){D[k].length=0;for(const v of nd[k]) D[k].push(v);}
     N=t.length; idxOf.clear(); t.forEach((v,i)=>idxOf.set(v,i));
     trades.length=0; trades.push(...nd.trades);
     for(const k in m) delete m[k]; Object.assign(m,nd.m); D.src=nd.src;
-    if(live&&live.time<=t[N-1]) live=null;
+    IVS = nd.iv || (N>1 ? t[1]-t[0] : IVS);
+    if(reset||(live&&live.time<=t[N-1])) live=null;
     candles.setData(t.map((s,i)=>({time:s,open:o[i],high:h[i],low:l[i],close:c[i]})));
     s34.setData(t.map((s,i)=>e34[i]==null?{time:s}:{time:s,value:e34[i]}));
     s89.setData(t.map((s,i)=>e89[i]==null?{time:s}:{time:s,value:e89[i]}));
     if(live) this.tick(live);
     // Đang xem mép phải thì trượt theo nến mới; đang xem quá khứ thì đứng yên.
-    if(range){const shift=range.to>=oldN-1?N-oldN:0;ts.setVisibleLogicalRange({from:range.from+shift,to:range.to+shift});}
+    if(reset){ selected=null; hoverI=null; }
+    else if(range){const shift=range.to>=oldN-1?N-oldN:0;ts.setVisibleLogicalRange({from:range.from+shift,to:range.to+shift});}
     fillReasons(); renderHead();
     selected=keep?trades.find(x=>x.ei===keep.ei&&x.side===keep.side)||null:null;
     applyFilters(); renderLegend(hoverI);
+    if(reset){const cl=trades.filter(x=>!x.open), last=trades.find(x=>x.open)||cl[cl.length-1];
+      if(last) select(last); else ts.setVisibleLogicalRange({from:N-150,to:N+8});
+      chart.applyOptions({timeScale:{tickMarkFormatter:tickFmt},localization:{timeFormatter:s=>fmtFull(s),priceFormatter:p=>px(p)}});}
   },
   tick(b){
     if(b.time<=t[N-1]) return;
