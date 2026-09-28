@@ -17,7 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
 TEMPLATE = ROOT / "data" / "chart_template" / "template.html"
-PY_SOURCES = [ROOT / "trading_bot", ROOT / "data" / "chart_template" / "build_chart.py"]
+PY_SOURCES = [ROOT / "trading_bot", ROOT / "data" / "chart_template" / "build_chart.py",
+              ROOT / "data" / "chart_template" / "incremental.py"]
 
 LIVE_CSS = """<style>
 .live{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -36,7 +37,7 @@ LIVE_CSS = """<style>
 """
 
 
-def build(out: Path) -> None:
+def build(out: Path, seeds: bool = False) -> None:
     if out.exists():
         shutil.rmtree(out)
     (out / "web").mkdir(parents=True)
@@ -56,8 +57,11 @@ def build(out: Path) -> None:
     html = html.replace("<div class=\"wrap\">", LIVE_CSS + "<div class=\"wrap\">", 1)
     # Mã phiên bản theo nội dung: đổi code là đổi URL, trình duyệt không dùng bản cũ trong cache.
     digest = hashlib.sha1()
-    for path in sorted(WEB.glob("*.js")) + sorted(ROOT.joinpath("trading_bot").rglob("*.py")):
-        digest.update(path.read_bytes())
+    # Gồm cả code Python: seed pickle chỉ dùng được với đúng phiên bản code đã tạo ra nó.
+    py_files = [f for s in PY_SOURCES for f in (sorted(s.rglob("*.py")) if s.is_dir() else [s])]
+    for path in sorted(WEB.glob("*.js")) + py_files:
+        if "__pycache__" not in path.parts:
+            digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
     version = digest.hexdigest()[:10]
     html += (f'\n<script>window.BOT2_VERSION="{version}";</script>'
              f'\n<script src="web/app.js?v={version}"></script>\n')
@@ -79,8 +83,12 @@ def build(out: Path) -> None:
             shutil.copy2(path, target)
             manifest.append(rel)
     (out / "py" / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
-    print(f"Đã dựng {out} ({len(manifest)} file Python).")
+    print(f"Đã dựng {out} ({len(manifest)} file Python, phiên bản {version}).")
+    if seeds:
+        import build_seeds
+        build_seeds.build(out / "seed", version)
 
 
 if __name__ == "__main__":
-    build(ROOT / "_site")
+    import sys
+    build(ROOT / "_site", seeds="--seeds" in sys.argv)

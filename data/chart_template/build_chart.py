@@ -17,7 +17,6 @@ import argparse
 import csv
 import json
 import sys
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -26,12 +25,10 @@ WORKSPACE = HERE.parents[1]
 sys.path.insert(0, str(WORKSPACE))
 
 from trading_bot.backtest.csv_loader import load_bars_csv  # noqa: E402
-from trading_bot.backtest.metrics import (  # noqa: E402
-    calculate_trade_metrics,
-    extract_closed_trades,
-)
-from trading_bot.backtest.runner import BacktestReport, run_backtest_report  # noqa: E402
-from trading_bot.core.models import Bar, PositionSide  # noqa: E402
+from trading_bot.core.models import Bar  # noqa: E402
+
+sys.path.insert(0, str(HERE))
+from incremental import IncrementalChart  # noqa: E402
 
 TEMPLATE = HERE / "template.html"
 
@@ -65,78 +62,12 @@ def load_bars(files: list[Path]) -> list[Bar]:
     return bars
 
 
-def r2(value: float | None) -> float | None:
-    return None if value is None else round(value, 2)
-
-
-def build_payload(bars: list[Bar], results: list | None = None) -> dict:
-    """Dựng dữ liệu chart. Truyền sẵn ``results`` (từ engine đã chạy nối tiếp) để khỏi
-    chạy lại backtest từ đầu — trang live dùng cách này khi chỉ có vài nến mới."""
-    if results is None:
-        report = run_backtest_report(bars)
-    else:
-        trades = extract_closed_trades(results)
-        report = BacktestReport(results=tuple(results), trades=tuple(trades),
-                                trade_metrics=calculate_trade_metrics(trades))
-    results = report.results
-
-    def active_stops(side: PositionSide, entry: int, exit_: int, initial: float) -> list[float]:
-        # Stop chốt ở Close nến trước, có hiệu lực từ nến kế tiếp. Có thể nhiều lệnh mở
-        # song song, nên tìm đúng lệnh theo chiều + nến vào lệnh.
-        stops = [initial]
-        for bar_index in range(entry + 1, exit_ + 1):
-            stop = next((p.hard_stop_price for p in results[bar_index - 1].state.open_positions
-                         if p.side == side and p.entry_bar_index == entry), None)
-            stops.append(r2(stop) if stop else stops[-1])
-        return stops
-
-    trades = []
-    for number, trade in enumerate(report.trades, start=1):
-        direction = 1.0 if trade.side == PositionSide.LONG else -1.0
-        initial_stop = r2(trade.entry_price - direction * trade.initial_risk / trade.quantity)
-        trades.append({
-            "id": number, "ei": trade.entry_bar_index, "xi": trade.exit_bar_index,
-            "side": trade.side.value,
-            "setup": trade.source_setup.name if trade.source_setup else "",
-            "entry": r2(trade.entry_price), "exit": r2(trade.exit_price),
-            "sl": initial_stop, "tp": r2(trade.take_profit_price),
-            "reason": trade.exit_reason, "pnl": r2(trade.pnl), "r": round(trade.r_multiple, 3),
-            "stops": active_stops(trade.side, trade.entry_bar_index, trade.exit_bar_index,
-                                  initial_stop),
-        })
-
-    open_positions = results[-1].state.open_positions if results else ()
-    for last in open_positions:
-        if last.size <= 0 or last.entry_bar_index is None:
-            continue
-        initial_stop = r2(last.initial_hard_stop_price)
-        trades.append({
-            "id": len(trades) + 1, "ei": last.entry_bar_index, "xi": len(bars) - 1,
-            "side": last.side.value,
-            "setup": last.source_setup.name if last.source_setup else "",
-            "entry": r2(last.entry_price), "exit": None, "sl": initial_stop,
-            "tp": r2(last.take_profit_price), "reason": "OPEN", "pnl": None, "r": None,
-            "stops": active_stops(last.side, last.entry_bar_index, len(bars) - 1, initial_stop),
-            "open": True,
-        })
-
-    # Engine trả lệnh theo thứ tự đóng; xếp lại theo nến vào lệnh để duyệt theo thời gian.
-    trades.sort(key=lambda x: (x["ei"], x["xi"]))
-    for number, trade in enumerate(trades, start=1):
-        trade["id"] = number
-
-    return {
-        "t": [int(b.timestamp.timestamp()) for b in bars],
-        "o": [round(b.open, 3) for b in bars],
-        "h": [round(b.high, 3) for b in bars],
-        "l": [round(b.low, 3) for b in bars],
-        "c": [round(b.close, 3) for b in bars],
-        "e34": [r2(r.context.indicators.ema_fast) for r in results],
-        "e89": [r2(r.context.indicators.ema_slow) for r in results],
-        "trades": trades,
-        "m": {k: (round(v, 4) if isinstance(v, float) else v)
-              for k, v in asdict(report.trade_metrics).items()},
-    }
+def build_payload(bars: list[Bar]) -> dict:
+    """Chạy Bot2 trên toàn bộ nến và trả dữ liệu chart (xem incremental.IncrementalChart)."""
+    chart = IncrementalChart()
+    for bar in bars:
+        chart.add(bar)
+    return chart.payload()
 
 
 def main() -> None:

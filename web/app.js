@@ -1,12 +1,14 @@
-// Bot2 Live trên GitHub Pages: trình duyệt tự lấy nến Binance, chạy Bot2 (Python/Pyodide trong
+// Bot2 Live trên GitHub Pages: trình duyệt lấy nến Binance, chạy Bot2 (Python/Pyodide trong
 // worker.js) rồi vẽ Trade Explorer; nến đang chạy nhảy theo WebSocket, nến đóng thì Bot2 tính thêm.
-// - Đổi khung ngay trong trang, không tải lại.
-// - Nến + kết quả Bot2 của từng khung lưu trong IndexedDB của trình duyệt: mở lại là hiện ngay,
-//   chỉ tải/tính các nến mới. Code Bot2 đổi (BOT2_VERSION khác) thì giữ nến, chỉ tính lại Bot2.
-// Tham số URL tùy chọn: ?symbol=ETHUSDT&interval=4h&market=spot&start=2025-06-01
+// Mở một khung theo thứ tự nhanh nhất có được:
+//   1. bản lưu trong trình duyệt (IndexedDB: dữ liệu chart + trạng thái Bot2) — hiện ngay;
+//   2. seed GitHub tính sẵn hằng ngày (web/build_seeds.py) — lịch sử dài, không phải chạy lại;
+//   3. không có cả hai (vd. ?start= sớm hơn seed): tải nến song song rồi chạy Bot2 từ đầu.
+// Sau đó chỉ tải nến mới đóng và Bot2 chỉ tính thêm các nến đó.
+// Tham số URL tùy chọn: ?interval=15m&start=2023-01-01&symbol=ETHUSDT&market=spot
 (function(){
 const q = new URLSearchParams(location.search);
-// Mỗi khung chạy Bot2 trên chính nến của khung đó; lịch sử mặc định ~8–15 nghìn nến.
+// Lịch sử mặc định khi KHÔNG có seed (chạy hoàn toàn trong trình duyệt nên giữ ngắn).
 const TFS = {
   '5m':  {label:'5p',   name:'M5',  ms:3e5,   days:30},
   '15m': {label:'15p',  name:'M15', ms:9e5,   days:90},
@@ -28,15 +30,18 @@ const SYM_LABEL = SYMBOL + (MARKET === 'futures' ? '.P' : '');
 const $ = id => document.getElementById(id);
 const fmt = v => v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const clock = () => new Date().toLocaleTimeString('vi-VN',{hour12:false});
-const startOf = (tf, explicit) => explicit || TFS[tf].start ||
-  new Date(Date.now() - TFS[tf].days * 864e5).toISOString().slice(0, 10);
+const fmtDate = s => s.split('-').reverse().join('/');
+const fallbackStart = tf => TFS[tf].start || new Date(Date.now() - TFS[tf].days * 864e5).toISOString().slice(0, 10);
 
 // ---- lưu trữ trong trình duyệt (IndexedDB) — lỗi/không có thì chạy như bình thường ----
 const store = (() => {
   let dbp = null;
   const open = () => dbp || (dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('bot2-live', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('tf');
+    const r = indexedDB.open('bot2-live', 2);
+    r.onupgradeneeded = () => {   // v2: lưu trạng thái Bot2 thay cho danh sách nến
+      if (r.result.objectStoreNames.contains('tf')) r.result.deleteObjectStore('tf');
+      r.result.createObjectStore('tf');
+    };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   }));
   const tx = async (mode, fn) => { const db = await open(); return new Promise((res, rej) => {
@@ -48,9 +53,15 @@ const store = (() => {
   };
 })();
 
+// ---- seed GitHub (chỉ Futures BTCUSDT) ----
+const seedIndex = (SYMBOL === 'BTCUSDT' && MARKET === 'futures')
+  ? fetch(`seed/index.json?v=${VERSION}`).then(r => r.ok ? r.json() : null)
+      .then(ix => ix && ix.version === VERSION ? ix.seeds : null).catch(() => null)
+  : Promise.resolve(null);
+
 // ---- trạng thái ----
 let TC = null;              // API chart (window.TradeChart) sau khi dựng lần đầu
-let cur = null;             // khung đang xem: {tf, key, start, rows}
+let cur = null;             // khung đang xem: {tf, key, start, n, lastT, ckpt, loading}
 let loadToken = 0;          // tăng mỗi lần đổi khung; tác vụ cũ thấy token khác thì tự dừng
 let running = false, rerunQueued = false;
 
@@ -77,26 +88,29 @@ const setStatus = (s, text) => { box.dataset.s = s; $('lv-st').textContent = tex
 const setBoot = text => { const el = $('boot-st'); if (el) el.textContent = text; };
 const showOverlay = on => { overlay.hidden = !on; };
 
-// ---- nến đã đóng (REST) ----
+// ---- nến đã đóng (REST), tải song song theo trang ----
 async function fetchClosed(tf, startMs, token){
-  const iv = TFS[tf].ms, out = [];
-  for (let cursor = startMs; ; ) {
-    const r = await fetch(`${REST}?symbol=${SYMBOL}&interval=${tf}&startTime=${cursor}&limit=${PAGE}`);
-    if (!r.ok) throw new Error(`Binance ${r.status}: ${await r.text()}`);
-    const page = await r.json(), now = Date.now();
-    if (token !== loadToken) return out;
-    for (const k of page) if (k[6] < now) out.push([k[0], +k[1], +k[2], +k[3], +k[4]]);
-    if (page.length < PAGE) break;
-    cursor = page[page.length - 1][0] + iv;
-    setBoot(`Đang tải nến từ Binance… ${out.length.toLocaleString('vi-VN')}`);
-  }
-  return out;
+  const iv = TFS[tf].ms, now = Date.now(), starts = [];
+  for (let s = startMs; s < now; s += PAGE * iv) starts.push(s);
+  const pages = new Array(starts.length); let next = 0, done = 0;
+  const one = async () => {
+    while (next < starts.length) {
+      const i = next++;
+      const r = await fetch(`${REST}?symbol=${SYMBOL}&interval=${tf}&startTime=${starts[i]}&limit=${PAGE}`);
+      if (!r.ok) throw new Error(`Binance ${r.status}: ${await r.text()}`);
+      pages[i] = await r.json();
+      if (starts.length > 2) setBoot(`Đang tải nến từ Binance… ${Math.round(++done / starts.length * 100)}%`);
+    }
+  };
+  await Promise.all(Array.from({length: Math.min(6, starts.length)}, one));
+  if (token !== loadToken) return [];
+  const out = [], seen = new Set(), t = Date.now();
+  for (const page of pages) for (const k of page)
+    if (k[6] < t && !seen.has(k[0])) { seen.add(k[0]); out.push([k[0], +k[1], +k[2], +k[3], +k[4]]); }
+  return out.sort((a, b) => a[0] - b[0]);
 }
-async function fetchNew(c, token){
-  const last = c.rows.length ? c.rows[c.rows.length - 1][0] : null;
-  const fresh = await fetchClosed(c.tf, last == null ? Date.parse(c.start + 'T00:00:00Z') : last + TFS[c.tf].ms, token);
-  return last == null ? fresh : fresh.filter(r => r[0] > last);
-}
+const fetchAfter = async (c, token) =>
+  (await fetchClosed(c.tf, c.lastT + TFS[c.tf].ms, token)).filter(r => r[0] > c.lastT);
 
 // ---- Bot2 trong worker ----
 const worker = new Worker('web/worker.js?v=' + (window.BOT2_VERSION || Date.now()));
@@ -107,10 +121,13 @@ worker.onmessage = ev => {
   waiting.delete(m.id);
   m.error ? p.reject(new Error(m.error)) : p.resolve(m);
 };
-const runBot = (c, stage = () => {}) => new Promise((resolve, reject) => {
+// rows: nến mới cần thêm; c.n > 0 -> tính tiếp từ trạng thái c (trong worker hoặc c.ckpt).
+const runBot = (c, rows, stage = () => {}) => new Promise((resolve, reject) => {
   const id = ++seq; waiting.set(id, {resolve, reject, stage});
-  worker.postMessage({id, key: c.key, rows: c.rows, source: SOURCE});
+  const base = c.n > 0 ? {n: c.n, lastT: c.lastT, ckpt: c.ckpt} : null;
+  worker.postMessage({id, key: c.key, rows, base, source: SOURCE, wantCkpt: true});
 });
+const adopt = (c, m) => { c.n = m.n; c.lastT = m.lastT; c.ckpt = m.ckpt; };
 
 function render(payload, c, reset){
   payload.iv = TFS[c.tf].ms / 1000;
@@ -126,77 +143,97 @@ function render(payload, c, reset){
   }
   showOverlay(false);
 }
-const save = (c, payloadJson) => store.put(c.key, {version: VERSION, start: c.start, rows: c.rows, payload: payloadJson, savedAt: Date.now()});
+const save = (c, payloadJson) => store.put(c.key, {version: VERSION, start: c.start, n: c.n, lastT: c.lastT,
+                                                   ckpt: c.ckpt, payload: payloadJson, savedAt: Date.now()});
 
-// Có nến mới đóng -> Bot2 chỉ tính thêm các nến đó (engine giữ trong worker), lưu lại.
+// Có nến mới đóng -> Bot2 chỉ tính thêm các nến đó, lưu lại.
 async function syncClosed(){
-  const c = cur, token = loadToken; if (!c || !TC || c.loading) return;
+  const c = cur, token = loadToken; if (!c || !TC || c.loading || !c.n) return;
+  if (running) { rerunQueued = true; return; }
+  running = true;
   try {
-    const fresh = await fetchNew(c, token);
+    const fresh = await fetchAfter(c, token);
     if (!fresh.length || token !== loadToken) return;
-    c.rows.push(...fresh);
-    if (running) { rerunQueued = true; return; }
-    running = true;
-    try {
-      setStatus(box.dataset.s, 'Nến vừa đóng — Bot2 đang tính thêm…');
-      const m = await runBot(c);
-      if (token === loadToken) { render(JSON.parse(m.payload), c, false); save(c, m.payload); }
-      setStatus(box.dataset.s, `Bot2 cập nhật ${clock()} (+${m.bars} nến, ${(m.ms/1000).toFixed(1)}s)`);
-    } finally {
-      running = false;
-      if (rerunQueued) { rerunQueued = false; syncClosed(); }
-    }
+    setStatus(box.dataset.s, 'Nến vừa đóng — Bot2 đang tính thêm…');
+    const m = await runBot(c, fresh);
+    if (token !== loadToken) return;
+    adopt(c, m); render(JSON.parse(m.payload), c, false); save(c, m.payload);
+    setStatus(box.dataset.s, `Bot2 cập nhật ${clock()} (+${m.added} nến, ${(m.ms/1000).toFixed(1)}s)`);
   } catch(e) { /* thử lại ở lần sau */ }
+  finally {
+    running = false;
+    if (rerunQueued) { rerunQueued = false; syncClosed(); }
+  }
 }
 
-// ---- mở một khung: bản đã lưu hiện ngay, rồi bổ sung nến mới ----
+// ---- mở một khung ----
 async function show(tf){
   const token = ++loadToken;
   disconnect();
   const first = !TC;
-  const c = cur = {tf, key: `${SYMBOL}|${MARKET}|${tf}`, start: startOf(tf, START_PARAM), rows: [], loading: true};
+  const key = `${SYMBOL}|${MARKET}|${tf}`;
   tfGroup.querySelectorAll('[data-tf]').forEach(b => b.setAttribute('aria-pressed', b.dataset.tf === tf));
   const tfEl = $('tf-label'); if (tfEl) tfEl.textContent = TFS[tf].name;
   document.title = `${SYM_LABEL} ${TFS[tf].name} Bot2 Live`;
   const p = new URLSearchParams(location.search); p.set('interval', tf);
   history.replaceState(null, '', '?' + p.toString());
   prevClose = null; $('lv-px').textContent = '—'; $('lv-ch').textContent = '';
+  $('boot-hd').textContent = `Đang dựng chart live ${TFS[tf].name}`;
 
   try {
-    const saved = await store.get(c.key);
+    const [saved, seeds] = await Promise.all([store.get(key), seedIndex]);
     if (token !== loadToken) return;
-    let shown = false;
-    // Bản lưu dùng được khi có đủ lịch sử từ ngày bắt đầu cần xem (khung 5p/15p lấy "30/90 ngày
-    // gần nhất" nên ngày bắt đầu trượt dần — lịch sử cũ hơn vẫn giữ). Quá dài thì tải lại cho gọn.
-    if (saved && saved.start <= c.start && Array.isArray(saved.rows) && saved.rows.length && saved.rows.length < 40000) {
-      c.rows = saved.rows; c.start = saved.start;
-      if (saved.version === VERSION && saved.payload) {
-        render(JSON.parse(saved.payload), c, !first); shown = true;
-        setStatus('poll', `Bản lưu ${new Date(saved.savedAt).toLocaleString('vi-VN',{hour12:false})} — đang lấy nến mới…`);
-        connect(tf, token);   // giá chạy ngay trên bản lưu, không chờ Bot2
-      }
-    }
-    if (!shown) {
-      $('boot-hd').textContent = `Đang dựng chart live ${TFS[tf].name}`;
-      setBoot(c.rows.length ? 'Code Bot2 đã đổi — đang tính lại trên nến đã lưu…' : 'Đang tải nến từ Binance…');
+    const seed = seeds && seeds[tf];
+    const want = START_PARAM || (seed ? seed.start : fallbackStart(tf));
+    const c = cur = {tf, key, start: want, n: 0, lastT: null, ckpt: null, loading: true};
+    let shown = false, pending = null;   // pending: dữ liệu chart chưa lưu vào IndexedDB
+
+    if (saved && saved.version === VERSION && saved.start <= want && saved.ckpt && saved.payload) {
+      Object.assign(c, {start: saved.start, n: saved.n, lastT: saved.lastT, ckpt: saved.ckpt});
+      render(JSON.parse(saved.payload), c, !first); shown = true;
+      setStatus('poll', `Bản lưu ${new Date(saved.savedAt).toLocaleString('vi-VN',{hour12:false})} — đang lấy nến mới…`);
+    } else if (seed && seed.start <= want) {
       showOverlay(true);
+      setBoot(`Đang tải dữ liệu Bot2 tính sẵn (${seed.bars.toLocaleString('vi-VN')} nến từ ${fmtDate(seed.start)})…`);
+      const [text, ckpt] = await Promise.all([
+        fetch(`${seed.json}?v=${VERSION}`).then(r => { if (!r.ok) throw new Error('seed ' + r.status); return r.text(); }),
+        fetch(`${seed.pkl}?v=${VERSION}`).then(r => { if (!r.ok) throw new Error('seed ' + r.status); return r.arrayBuffer(); }),
+      ]);
+      if (token !== loadToken) return;
+      Object.assign(c, {start: seed.start, n: seed.bars, lastT: seed.last, ckpt});
+      render(JSON.parse(text), c, !first); shown = true; pending = text;
+      setStatus('poll', 'Dữ liệu tính sẵn — đang lấy nến mới…');
     }
-    const fresh = await fetchNew(c, token);
-    if (token !== loadToken) return;
-    c.rows.push(...fresh);
-    if (!c.rows.length) throw new Error('Binance không trả về nến nào.');
-    if (!shown || fresh.length) {
+    if (shown) connect(tf, token);   // giá chạy ngay, Bot2 bổ sung nến mới ở nền
+
+    if (!shown) {   // không có bản lưu/seed phù hợp: chạy Bot2 từ đầu trong trình duyệt
+      showOverlay(true); setBoot('Đang tải nến từ Binance…');
+      const rows = await fetchClosed(tf, Date.parse(want + 'T00:00:00Z'), token);
+      if (token !== loadToken) return;
+      if (!rows.length) throw new Error('Binance không trả về nến nào.');
       running = true;
       try {
-        const m = await runBot(c, shown ? () => {} : setBoot);
+        const m = await runBot(c, rows, setBoot);
         if (token !== loadToken) return;
-        render(JSON.parse(m.payload), c, !first && !shown);
-        save(c, m.payload);
-        setStatus(box.dataset.s, `Bot2 xong (${m.bars.toLocaleString('vi-VN')} nến, ${(m.ms/1000).toFixed(1)}s)` + (shown ? '' : ' — đang nối WebSocket…'));
+        adopt(c, m); render(JSON.parse(m.payload), c, !first); save(c, m.payload);
+        setStatus('poll', `Bot2 xong (${m.added.toLocaleString('vi-VN')} nến, ${(m.ms/1000).toFixed(1)}s) — đang nối WebSocket…`);
       } finally { running = false; }
+      connect(tf, token);
+    } else {        // bù các nến đóng sau bản lưu/seed
+      const fresh = await fetchAfter(c, token);
+      if (token !== loadToken) return;
+      if (fresh.length) {
+        running = true;
+        try {
+          const m = await runBot(c, fresh);
+          if (token !== loadToken) return;
+          adopt(c, m); render(JSON.parse(m.payload), c, false); pending = m.payload;
+          setStatus(box.dataset.s, `Bot2 tính thêm ${m.added.toLocaleString('vi-VN')} nến (${(m.ms/1000).toFixed(1)}s)`);
+        } finally { running = false; }
+      }
+      if (pending) save(c, pending);
     }
     c.loading = false;
-    if (!shown) connect(tf, token); else syncClosed();
   } catch(e) {
     if (token !== loadToken) return;
     setBoot('Lỗi: ' + e.message + ' — tải lại trang để thử lại. (Binance chặn truy cập từ một số quốc gia, ví dụ Mỹ.)');
@@ -206,7 +243,7 @@ async function show(tf){
 }
 
 // ---- giá realtime ----
-let ws = null, wsToken = 0, lastMsg = 0, retry = 1000, pollTimer = null, prevClose = null;
+let ws = null, lastMsg = 0, retry = 1000, pollTimer = null, prevClose = null;
 function onBar(b){
   TC.tick(b);
   const el = $('lv-px'); el.textContent = fmt(b.close);
@@ -220,7 +257,6 @@ function onBar(b){
 }
 function connect(tf, token){
   if (token !== loadToken) return;
-  wsToken = token;
   try { ws = new WebSocket(`${WS_BASE}${SYMBOL.toLowerCase()}@kline_${tf}`); } catch(e) { startPolling(tf, token); return; }
   const sock = ws;
   sock.onopen = () => { lastMsg = Date.now(); syncClosed(); };
@@ -229,7 +265,7 @@ function connect(tf, token){
     const k = JSON.parse(ev.data).k; if (!k) return;
     retry = 1000; stopPolling();
     onBar({time: k.t/1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c});
-    if (!running) setStatus('on', `Live · ${clock()}`);
+    if (!running && !cur.loading) setStatus('on', `Live · ${clock()}`);
     if (k.x) setTimeout(syncClosed, 1500);
   };
   sock.onclose = () => {
@@ -246,7 +282,7 @@ function startPolling(tf, token){
       const k = (await (await fetch(`${REST}?symbol=${SYMBOL}&interval=${tf}&limit=1`)).json())[0];
       if (token !== loadToken) return;
       onBar({time: k[0]/1000, open: +k[1], high: +k[2], low: +k[3], close: +k[4]});
-      if (!running) setStatus('poll', `REST 2s · ${clock()}`);
+      if (!running && !cur.loading) setStatus('poll', `REST 2s · ${clock()}`);
     } catch(e) { setStatus('off', 'Mất kết nối Binance — đang thử lại'); }
   };
   run(); pollTimer = setInterval(run, 2000);

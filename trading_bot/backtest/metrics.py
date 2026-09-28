@@ -84,34 +84,40 @@ def calculate_metrics(results: list[ProcessResult]) -> DiagnosticMetrics:
     )
 
 
-def extract_closed_trades(results: list[ProcessResult]) -> list[ClosedTrade]:
-    """Build a closed-trade ledger from engine events, including overlaps."""
-    open_trades: dict[str, dict[str, object]] = {}
-    trades: list[ClosedTrade] = []
-    legacy_trade_number = 0
-    close_events = {
-        "POSITION_CLOSED_HARD_STOP",
-        "POSITION_CLOSED_TRADE_INVALIDATION",
-        "POSITION_CLOSED_TREND_LOST",
-        "POSITION_CLOSED_TAKE_PROFIT",
-    }
+_CLOSE_EVENTS = frozenset({
+    "POSITION_CLOSED_HARD_STOP",
+    "POSITION_CLOSED_TRADE_INVALIDATION",
+    "POSITION_CLOSED_TREND_LOST",
+    "POSITION_CLOSED_TAKE_PROFIT",
+})
 
-    for result in results:
+
+class ClosedTradeTracker:
+    """Ghi sổ lệnh từ sự kiện engine theo từng nến — dùng được nối tiếp (chart live)."""
+
+    def __init__(self) -> None:
+        self.open_trades: dict[str, dict[str, object]] = {}
+        self.legacy_trade_number = 0
+
+    def feed(self, result: ProcessResult) -> list[ClosedTrade]:
+        """Xử lý sự kiện của một nến, trả các lệnh vừa đóng trong nến đó."""
+        closed: list[ClosedTrade] = []
+        close_events = _CLOSE_EVENTS
         for event in result.events:
             if event.name == "POSITION_OPENED":
                 trade_id = event.payload.get("trade_id")
                 if trade_id is None:
-                    legacy_trade_number += 1
-                    trade_id = f"LEGACY-{legacy_trade_number}"
+                    self.legacy_trade_number += 1
+                    trade_id = f"LEGACY-{self.legacy_trade_number}"
                 trade_id = str(trade_id)
-                if trade_id in open_trades:
+                if trade_id in self.open_trades:
                     raise ValueError(f"duplicate open trade id: {trade_id}")
                 source_setup = event.payload.get("setup")
                 if source_setup is not None:
                     source_setup = SetupType[str(source_setup)]
                 else:
                     source_setup = result.entry.source_setup
-                open_trades[trade_id] = {
+                self.open_trades[trade_id] = {
                     "side": PositionSide(event.payload["side"]),
                     "source_setup": source_setup,
                     "entry_bar_index": event.bar_index,
@@ -126,12 +132,12 @@ def extract_closed_trades(results: list[ProcessResult]) -> list[ClosedTrade]:
                 continue
             trade_id = event.payload.get("trade_id")
             if trade_id is None:
-                if len(open_trades) != 1:
+                if len(self.open_trades) != 1:
                     raise ValueError(
                         f"received {event.name} without an unambiguous trade id"
                     )
-                trade_id = next(iter(open_trades))
-            open_trade = open_trades.pop(str(trade_id), None)
+                trade_id = next(iter(self.open_trades))
+            open_trade = self.open_trades.pop(str(trade_id), None)
             if open_trade is None:
                 raise ValueError(
                     f"received {event.name} without active trade {trade_id}"
@@ -149,7 +155,7 @@ def extract_closed_trades(results: list[ProcessResult]) -> list[ClosedTrade]:
             if initial_risk <= 0.0:
                 raise ValueError("trade initial risk must be positive")
 
-            trades.append(
+            closed.append(
                 ClosedTrade(
                     side=side,
                     source_setup=open_trade["source_setup"],
@@ -168,7 +174,17 @@ def extract_closed_trades(results: list[ProcessResult]) -> list[ClosedTrade]:
                 )
             )
 
+        return closed
+
+
+def extract_closed_trades(results: list[ProcessResult]) -> list[ClosedTrade]:
+    """Build a closed-trade ledger from engine events, including overlaps."""
+    tracker = ClosedTradeTracker()
+    trades: list[ClosedTrade] = []
+    for result in results:
+        trades.extend(tracker.feed(result))
     return trades
+
 
 def calculate_trade_metrics(trades: list[ClosedTrade]) -> TradeMetrics:
     wins = sum(trade.pnl > 0.0 and not isclose(trade.pnl, 0.0) for trade in trades)

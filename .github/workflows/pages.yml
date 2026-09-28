@@ -1,4 +1,5 @@
-# Mỗi lần push lên main: chạy test Bot2, dựng trang live (web/build_site.py) và đăng lên GitHub Pages.
+# Mỗi lần push lên main và mỗi ngày một lần: chạy test Bot2, tính sẵn Bot2 cho từng khung
+# (web/build_seeds.py, dữ liệu data.binance.vision), dựng trang live và đăng lên GitHub Pages.
 # Bật một lần: Settings → Pages → Build and deployment → Source: GitHub Actions.
 name: Deploy Bot2 Live
 
@@ -6,6 +7,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "30 2 * * *"   # 09:30 giờ VN: file ngày hôm trước của Binance thường đã có
 
 permissions:
   contents: read
@@ -26,11 +29,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"   # trùng Python của Pyodide 0.28 để seed pickle nạp được
       - name: Test Bot2
         run: python -m unittest discover -s tests
-      - name: Build site
-        run: python web/build_site.py
+      - name: Build site + seed Bot2
+        run: python web/build_site.py --seeds
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
