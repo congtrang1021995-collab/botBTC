@@ -9,6 +9,7 @@ GitHub Actions (.github/workflows/pages.yml) chạy script này mỗi lần push
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -53,7 +54,13 @@ def build(out: Path) -> None:
             # Khối chart chỉ chạy khi app.js đã có dữ liệu từ Bot2.
             .replace(marker, '<script type="text/x-chart" id="chart-main">\nconst D = window.__D;'))
     html = html.replace("<div class=\"wrap\">", LIVE_CSS + "<div class=\"wrap\">", 1)
-    html += '\n<script src="web/app.js"></script>\n'
+    # Mã phiên bản theo nội dung: đổi code là đổi URL, trình duyệt không dùng bản cũ trong cache.
+    digest = hashlib.sha1()
+    for path in sorted(WEB.glob("*.js")) + sorted(ROOT.joinpath("trading_bot").rglob("*.py")):
+        digest.update(path.read_bytes())
+    version = digest.hexdigest()[:10]
+    html += (f'\n<script>window.BOT2_VERSION="{version}";</script>'
+             f'\n<script src="web/app.js?v={version}"></script>\n')
     (out / "index.html").write_text(html, encoding="utf-8")
     (out / ".nojekyll").write_text("", encoding="utf-8")
 

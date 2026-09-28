@@ -89,7 +89,7 @@ async function syncClosed(){
 }
 
 // ---- Bot2 chạy trong worker ----
-const worker = new Worker('web/worker.js');
+const worker = new Worker('web/worker.js?v=' + (window.BOT2_VERSION || Date.now()));
 let seq = 0; const waiting = new Map();
 worker.onmessage = ev => {
   const m = ev.data, p = waiting.get(m.id); if (!p) return;
