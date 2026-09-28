@@ -1,0 +1,693 @@
+//@version=6
+// Basic-compatible: Bar Magnifier is disabled because it requires a higher plan.
+// v3.2: Mỗi tín hiệu mở một trade độc lập; cho phép nhiều trade cùng chiều.
+// Stop ban đầu đóng băng tại nến tín hiệu; 1R và TP được tính từ giá khớp thực tế.
+// BOT 2 — bản sao từ v3.2 ngày 2026-09-24, rule mới đang xây từng step.
+// Bot 2 Step 1 (2026-09-24): giữ toàn bộ rule cũ, THÊM điều kiện bắt buộc: độ dốc
+// EMA34 (OLS) trên 13 nến gần nhất (n2 = 13, đổi từ 7 ngày 2026-09-24) phải cùng chiều trend.
+// Mốc tối thiểu cố định theo giá/nến (input "Độ dốc tối thiểu"): 2026-09-25 chốt mặc định 0 -> chỉ xét dấu;
+// dốc bằng 0 hoặc ngược chiều thì SIDEWAY. Cùng ngày: k nến pivot nâng 3 -> 5.
+// Bot 2 Step 4 (2026-09-24): giữ rule đảo chiều trend -> đóng lệnh tại Close (mặc định
+// bật); trend về SIDEWAY không đóng lệnh (input "Thoát lệnh khi mất trend" mặc định tắt).
+// Bot 2 Step 3/6 (2026-09-24): tối đa 2 lệnh nắm giữ — mỗi loại setup (Breakout,
+// Value Zone) 1 lệnh. Slot được xét sau khi đối soát các trade đã đóng trong nến.
+strategy(
+     title = "Investment System Bot 2 — Steps 1–7 v3.9 (slope 13 nến cùng dấu, k=5, 1 lệnh/setup, exit khi đảo chiều trend)",
+     shorttitle = "ISBot2",
+     overlay = true,
+     pyramiding = 100,
+     process_orders_on_close = false,
+     calc_on_order_fills = true,
+     calc_on_every_tick = false,
+     use_bar_magnifier = false,
+     max_bars_back = 5000)
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+
+string GROUP_TREND = "Step 1 — Trend"
+string GROUP_SETUP = "Step 2 — Setup"
+string GROUP_RISK = "Step 4–7 — Risk & Exit"
+string GROUP_VIEW = "Hiển thị"
+
+int emaFastLength = input.int(34, "EMA nhanh", minval = 1, group = GROUP_TREND)
+int emaSlowLength = input.int(89, "EMA chậm", minval = 2, group = GROUP_TREND)
+int slopeLength = input.int(8, "n — số nến đo slope/độ ổn định", minval = 2, maxval = 500, group = GROUP_TREND)
+int confirmSlopeLength = input.int(13, "n2 — số nến xác nhận độ dốc EMA34 (Bot 2)", minval = 2, maxval = 500, tooltip = "Điều kiện bắt buộc thêm vào rule cũ: hệ số hồi quy tuyến tính của EMA34 trên n2 nến gần nhất phải > ngưỡng khi UPTREND và < -ngưỡng khi DOWNTREND, cả lúc xác nhận trend mới lẫn lúc duy trì trend. Không thỏa thì trend = SIDEWAY.", group = GROUP_TREND)
+float minConfirmSlope = input.float(0.0, "Độ dốc tối thiểu (giá mỗi nến, Bot 2)", minval = 0.0, step = 0.5, tooltip = "Mốc cố định theo đơn vị giá/nến, không theo ATR. UPTREND cần độ dốc EMA34 > mốc, DOWNTREND cần < -mốc. Mặc định 0 (chốt 2026-09-25) = chỉ xét dấu: dốc dương -> có thể UPTREND, dốc âm -> có thể DOWNTREND, bằng 0 -> SIDEWAY.", group = GROUP_TREND)
+int pivotLegs = input.int(5, "k — số nến mỗi bên của pivot", minval = 1, maxval = 100, tooltip = "Bot 2 (2026-09-25): nâng từ 3 lên 5 nến. Pivot xác nhận trễ k nến.", group = GROUP_TREND)
+float minPositiveRatio = input.float(0.75, "Tỷ lệ delta dương tối thiểu", minval = 0.0, maxval = 1.0, step = 0.05, group = GROUP_TREND)
+float minNegativeRatio = input.float(0.75, "Tỷ lệ delta âm tối thiểu", minval = 0.0, maxval = 1.0, step = 0.05, group = GROUP_TREND)
+bool requireTrendMaintenanceFilter = input.bool(true, "Chỉ giữ trend khi EMA34/EMA89 chưa cắt ngược", tooltip = "Bật: uptrend mất khi EMA34 < EMA89, downtrend mất khi EMA34 > EMA89; hai EMA bằng nhau chưa làm mất trend. Giá và Protected Swing không quyết định mất trend. Tắt: không dùng bộ lọc EMA để làm mất trend.", group = GROUP_TREND)
+
+bool enableValueZoneSetup = input.bool(true, "Bật Value Zone Setup", group = GROUP_SETUP)
+bool enableBreakoutSetup = input.bool(true, "Bật Breakout Setup", group = GROUP_SETUP)
+int maxTradesPerSetup = input.int(1, "Số lệnh mở tối đa mỗi loại setup (Bot 2)", minval = 0, maxval = 100, tooltip = "1 = tối đa 1 lệnh Breakout + 1 lệnh Value Zone đang mở (tổng 2 lệnh). Tín hiệu mới của loại đã có lệnh mở bị bỏ qua; loại còn lại vẫn vào bình thường. 0 = không giới hạn như bot gốc.", group = GROUP_SETUP)
+
+int atrLength = input.int(13, "ATR Length", minval = 1, group = GROUP_RISK)
+float stopAtrMultiplier = input.float(0.30, "Stop ATR Multiplier", minval = 0.0, step = 0.01, group = GROUP_RISK)
+string riskModel = input.string("Khối lượng cố định", "Mô hình khối lượng", options = ["Khối lượng cố định", "Rủi ro % vốn"], group = GROUP_RISK)
+float fixedPositionSize = input.float(1.0, "Khối lượng cố định", minval = 0.000001, step = 1.0, group = GROUP_RISK)
+float riskPerTradePercent = input.float(1.0, "Rủi ro mỗi lệnh (% vốn)", minval = 0.01, maxval = 100.0, step = 0.1, tooltip = "Chỉ dùng khi chọn mô hình Rủi ro % vốn. Pine ước tính quantity từ Close nến xác nhận vì chưa biết trước Open nến kế tiếp; Python dùng Open thực tế.", group = GROUP_RISK)
+float quantityStep = input.float(0.0, "Bước khối lượng (0 = không làm tròn)", minval = 0.0, step = 1.0, group = GROUP_RISK)
+float maximumQuantity = input.float(0.0, "Khối lượng tối đa (0 = không giới hạn)", minval = 0.0, step = 1.0, group = GROUP_RISK)
+bool exitOnTrendReversal = input.bool(true, "Thoát lệnh khi trend đảo chiều (Bot 2)", tooltip = "Bật: Long đóng tại Close khi trend chuyển sang DOWNTREND, Short đóng khi trend chuyển sang UPTREND. Trend về SIDEWAY không đóng lệnh.", group = GROUP_RISK)
+bool exitOnTrendLoss = input.bool(false, "Thoát lệnh khi mất trend, kể cả SIDEWAY (bot gốc)", tooltip = "Bot 2 mặc định tắt: trend về SIDEWAY không đóng lệnh, lệnh chỉ đóng bằng hard stop, trailing stop, TP hoặc khi trend đảo chiều. Bật để đóng toàn bộ vị thế tại Close của mọi nến mất trend như bot gốc.", group = GROUP_RISK)
+// Phí giao dịch và trượt giá được khai báo ở tab Properties của strategy trên TradingView.
+// Backtest Python không mô phỏng phí, nên hai bên chỉ khớp khi để Properties bằng 0.
+
+bool showBackground = input.bool(true, "Tô màu trạng thái trend", group = GROUP_VIEW)
+bool showEmaLines = input.bool(true, "Hiện EMA 34/89 tích hợp", group = GROUP_VIEW)
+bool showSwings = input.bool(true, "Hiện Swing High/Low", group = GROUP_VIEW)
+bool showProtection = input.bool(true, "Hiện swing bảo vệ trend", group = GROUP_VIEW)
+bool showSetups = input.bool(true, "Hiện tín hiệu setup", group = GROUP_VIEW)
+bool showEntries = input.bool(true, "Hiện tín hiệu Entry", group = GROUP_VIEW)
+bool showRiskLevels = input.bool(true, "Hiện Stop / TP", group = GROUP_VIEW)
+string dashboardMode = input.string("Full", "Chế độ bảng", options = ["Full", "Lite", "Ẩn"], group = GROUP_VIEW)
+
+// =============================================================================
+// CONSTANTS AND HELPERS
+// =============================================================================
+
+const int TREND_UP = 1
+const int TREND_SIDEWAY = 0
+const int TREND_DOWN = -1
+const int ENTRY_NONE = 0
+const int ENTRY_LONG = 1
+const int ENTRY_SHORT = -1
+const int EMA_NONE = 0
+const int EMA_FAST = 1
+const int EMA_SLOW = 2
+const int SOURCE_NONE = 0
+const int SOURCE_VALUE_ZONE = 1
+const int SOURCE_BREAKOUT = 2
+// Bot 2 (2026-09-28): TP 10R; trailing vượt nR -> stop lên (n-1)R, n = 1..9.
+const float TAKE_PROFIT_R_MULTIPLE = 10.0
+const int TRAIL_MAX_TRIGGER_R = 9
+
+f_linear_regression_slope(float values, int length) =>
+    float result = na
+    if bar_index >= length - 1
+        float sumX = 0.0
+        float sumY = 0.0
+        float sumXY = 0.0
+        float sumXX = 0.0
+        for i = 0 to length - 1
+            float x = length - 1 - i
+            float y = values[i]
+            sumX += x
+            sumY += y
+            sumXY += x * y
+            sumXX += x * x
+        float denominator = length * sumXX - sumX * sumX
+        result := denominator != 0.0 ? (length * sumXY - sumX * sumY) / denominator : na
+    result
+
+f_delta_ratios(float values, int length) =>
+    float positiveRatio = na
+    float negativeRatio = na
+    if bar_index >= length - 1
+        float positiveCount = 0.0
+        float negativeCount = 0.0
+        for i = 0 to length - 2
+            float delta = values[i] - values[i + 1]
+            positiveCount += delta > 0.0 ? 1.0 : 0.0
+            negativeCount += delta < 0.0 ? 1.0 : 0.0
+        float intervals = length - 1
+        positiveRatio := positiveCount / intervals
+        negativeRatio := negativeCount / intervals
+    [positiveRatio, negativeRatio]
+
+f_strict_pivot_high(float values, int legs) =>
+    float pivot = na
+    if bar_index >= legs * 2
+        bool valid = true
+        for j = 0 to legs * 2
+            if j != legs and values[legs] <= values[j]
+                valid := false
+        pivot := valid ? values[legs] : na
+    pivot
+
+f_strict_pivot_low(float values, int legs) =>
+    float pivot = na
+    if bar_index >= legs * 2
+        bool valid = true
+        for j = 0 to legs * 2
+            if j != legs and values[legs] >= values[j]
+                valid := false
+        pivot := valid ? values[legs] : na
+    pivot
+
+f_trend_text(int state) =>
+    state == TREND_UP ? "UPTREND" : state == TREND_DOWN ? "DOWNTREND" : "SIDEWAY"
+
+f_side_text(int side) =>
+    side == ENTRY_LONG ? "LONG" : side == ENTRY_SHORT ? "SHORT" : "NONE"
+
+f_source_text(int source) =>
+    source == SOURCE_VALUE_ZONE ? "VALUE ZONE" : source == SOURCE_BREAKOUT ? "BREAKOUT" : "—"
+
+f_price_text(float price) =>
+    na(price) ? "—" : str.tostring(price, format.mintick)
+
+f_setup_text(bool valueLong, bool valueShort, bool breakoutLong, bool breakoutShort) =>
+    breakoutLong ? "BREAKOUT LONG" : breakoutShort ? "BREAKOUT SHORT" : valueLong ? "VALUE ZONE LONG" : valueShort ? "VALUE ZONE SHORT" : "NO SETUP"
+
+f_is_entry_open(string entryId) =>
+    bool found = false
+    if strategy.opentrades > 0
+        for tradeNumber = 0 to strategy.opentrades - 1
+            if strategy.opentrades.entry_id(tradeNumber) == entryId
+                found := true
+                break
+    found
+
+// =============================================================================
+// INDICATORS
+// =============================================================================
+
+float emaFast = ta.ema(close, emaFastLength)
+float emaSlow = ta.ema(close, emaSlowLength)
+float emaFastSlope = f_linear_regression_slope(emaFast, slopeLength)
+float emaFastConfirmSlope = f_linear_regression_slope(emaFast, confirmSlopeLength)
+[positiveDeltaRatio, negativeDeltaRatio] = f_delta_ratios(emaFast, slopeLength)
+float confirmedSwingHigh = f_strict_pivot_high(high, pivotLegs)
+float confirmedSwingLow = f_strict_pivot_low(low, pivotLegs)
+float atrValue = ta.atr(atrLength)
+float stopBuffer = math.max(3.0 * syminfo.mintick, atrValue * stopAtrMultiplier)
+
+// =============================================================================
+// PERSISTENT STATE
+// =============================================================================
+
+var float previousSwingHigh = na
+var float lastSwingHigh = na
+var float previousSwingLow = na
+var float lastSwingLow = na
+
+var int trendState = TREND_SIDEWAY
+var float protectedSwingLow = na
+var float protectedSwingHigh = na
+
+var int waitingValueZoneSide = ENTRY_NONE
+var int valueZoneEntryEma = EMA_NONE
+
+var int pendingOrderSide = ENTRY_NONE
+var int pendingOrderSource = SOURCE_NONE
+var int pendingSignalBar = na
+var float pendingInvalidation = na
+var float pendingHardStop = na
+var float pendingQuantity = na
+var string pendingEntryId = ""
+var int nextEntryNumber = 1
+
+// Mỗi phần tử cùng index mô tả một trade độc lập đang mở.
+var array<string> tradeEntryIds = array.new<string>()
+var array<int> tradeSides = array.new<int>()
+var array<float> tradeEntryPrices = array.new<float>()
+var array<float> tradeInvalidations = array.new<float>()
+var array<float> tradeInitialStops = array.new<float>()
+var array<float> tradeActiveStops = array.new<float>()
+var array<float> tradeTakeProfits = array.new<float>()
+var array<int> tradeSources = array.new<int>()
+var array<int> tradeEntryBars = array.new<int>()
+
+// Các biến active dưới đây chỉ phản ánh trade mới nhất để plot/dashboard.
+var float activeEntryPrice = na
+var float activeInvalidation = na
+var float activeInitialHardStop = na
+var float activeHardStop = na
+var float activeTakeProfit = na
+var int activeEntrySource = SOURCE_NONE
+var int activeEntryBar = na
+
+var bool previousValueZoneLong = false
+var bool previousValueZoneShort = false
+var bool previousBreakoutLong = false
+var bool previousBreakoutShort = false
+var int lastProcessedBar = na
+var int lastExitBar = na
+var int lastClosedTrades = 0
+
+bool newSwingHigh = false
+bool newSwingLow = false
+bool enteredUptrend = false
+bool enteredDowntrend = false
+bool enteredSideway = false
+bool valueZoneLongSetup = false
+bool valueZoneShortSetup = false
+bool breakoutLongSetup = false
+bool breakoutShortSetup = false
+bool newValueZoneLongSetup = false
+bool newValueZoneShortSetup = false
+bool newBreakoutLongSetup = false
+bool newBreakoutShortSetup = false
+bool longEntryScheduled = false
+bool shortEntryScheduled = false
+
+// =============================================================================
+// CLOSED-BAR STATE MACHINE — STEPS 1–7
+// =============================================================================
+
+// Market order được gửi ở Close nến xác nhận và khớp tại Open nến kế tiếp.
+// Sau fill, tạo bracket riêng cho trade mới; các trade cũ giữ nguyên stop/TP.
+bool pendingOrderFilled = false
+float pendingFillPrice = na
+if pendingOrderSide != ENTRY_NONE and str.length(pendingEntryId) > 0 and strategy.opentrades > 0
+    for tradeNumber = 0 to strategy.opentrades - 1
+        if strategy.opentrades.entry_id(tradeNumber) == pendingEntryId
+            pendingOrderFilled := true
+            pendingFillPrice := strategy.opentrades.entry_price(tradeNumber)
+            break
+
+if pendingOrderFilled
+    float filledRiskDistance = math.abs(pendingFillPrice - pendingHardStop)
+    float filledTakeProfit = pendingOrderSide == ENTRY_LONG ? pendingFillPrice + TAKE_PROFIT_R_MULTIPLE * filledRiskDistance : pendingFillPrice - TAKE_PROFIT_R_MULTIPLE * filledRiskDistance
+    array.push(tradeEntryIds, pendingEntryId)
+    array.push(tradeSides, pendingOrderSide)
+    array.push(tradeEntryPrices, pendingFillPrice)
+    array.push(tradeInvalidations, pendingInvalidation)
+    array.push(tradeInitialStops, pendingHardStop)
+    array.push(tradeActiveStops, pendingHardStop)
+    array.push(tradeTakeProfits, filledTakeProfit)
+    array.push(tradeSources, pendingOrderSource)
+    array.push(tradeEntryBars, bar_index)
+    strategy.exit("Exit " + pendingEntryId, from_entry = pendingEntryId, stop = pendingHardStop, limit = filledTakeProfit, qty_percent = 100, comment_loss = "Hard Stop", comment_profit = "Take Profit 10R", alert_message = "TRADE_EXIT")
+    activeEntryPrice := pendingFillPrice
+    activeInvalidation := pendingInvalidation
+    activeInitialHardStop := pendingHardStop
+    activeHardStop := pendingHardStop
+    activeTakeProfit := filledTakeProfit
+    activeEntrySource := pendingOrderSource
+    activeEntryBar := bar_index
+    pendingOrderSide := ENTRY_NONE
+    pendingOrderSource := SOURCE_NONE
+    pendingSignalBar := na
+    pendingInvalidation := na
+    pendingHardStop := na
+    pendingQuantity := na
+    pendingEntryId := ""
+bool processClosedBar = barstate.isconfirmed and bar_index != lastProcessedBar
+if processClosedBar
+    // STEP 0 — Đối soát từng trade với broker và dời stop độc lập.
+    bool tradeJustClosed = strategy.closedtrades > lastClosedTrades
+    int tradeIndex = array.size(tradeEntryIds) - 1
+    while tradeIndex >= 0
+        string entryId = array.get(tradeEntryIds, tradeIndex)
+        if not f_is_entry_open(entryId)
+            array.remove(tradeEntryIds, tradeIndex)
+            array.remove(tradeSides, tradeIndex)
+            array.remove(tradeEntryPrices, tradeIndex)
+            array.remove(tradeInvalidations, tradeIndex)
+            array.remove(tradeInitialStops, tradeIndex)
+            array.remove(tradeActiveStops, tradeIndex)
+            array.remove(tradeTakeProfits, tradeIndex)
+            array.remove(tradeSources, tradeIndex)
+            array.remove(tradeEntryBars, tradeIndex)
+            lastExitBar := bar_index
+        tradeIndex -= 1
+    if pendingOrderSide != ENTRY_NONE and tradeJustClosed and not f_is_entry_open(pendingEntryId) and bar_index > pendingSignalBar
+        // Lệnh mới đã khớp rồi thoát ngay trong cùng một nến trước lần đối soát.
+        pendingOrderSide := ENTRY_NONE
+        pendingOrderSource := SOURCE_NONE
+        pendingSignalBar := na
+        pendingInvalidation := na
+        pendingHardStop := na
+        pendingQuantity := na
+        pendingEntryId := ""
+        lastExitBar := bar_index
+    lastClosedTrades := strategy.closedtrades
+
+    // Trailing stop và bracket được tính riêng cho từng trade. Stop mới chỉ có
+    // hiệu lực từ nến kế tiếp vì Bar Magnifier đang tắt.
+    if array.size(tradeEntryIds) > 0
+        for currentIndex = 0 to array.size(tradeEntryIds) - 1
+            string entryId = array.get(tradeEntryIds, currentIndex)
+            int tradeSide = array.get(tradeSides, currentIndex)
+            float tradeEntryPrice = array.get(tradeEntryPrices, currentIndex)
+            float initialStop = array.get(tradeInitialStops, currentIndex)
+            float currentStop = array.get(tradeActiveStops, currentIndex)
+            float tradeTakeProfit = array.get(tradeTakeProfits, currentIndex)
+            float initialRiskDistance = math.abs(tradeEntryPrice - initialStop)
+            float favorableR = tradeSide == ENTRY_LONG ? (high - tradeEntryPrice) / initialRiskDistance : (tradeEntryPrice - low) / initialRiskDistance
+            float stopCandidate = na
+            float lockedR = na
+            for triggerR = TRAIL_MAX_TRIGGER_R to 1
+                if na(lockedR) and favorableR > triggerR
+                    lockedR := triggerR - 1
+            if not na(lockedR)
+                stopCandidate := tradeSide == ENTRY_LONG ? tradeEntryPrice + lockedR * initialRiskDistance : tradeEntryPrice - lockedR * initialRiskDistance
+            if not na(stopCandidate)
+                currentStop := tradeSide == ENTRY_LONG ? math.max(currentStop, stopCandidate) : math.min(currentStop, stopCandidate)
+                array.set(tradeActiveStops, currentIndex, currentStop)
+            strategy.exit("Exit " + entryId, from_entry = entryId, stop = currentStop, limit = tradeTakeProfit, qty_percent = 100, comment_loss = "Hard Stop", comment_profit = "Take Profit 10R", alert_message = "TRADE_EXIT")
+
+    // Plot/dashboard hiển thị trade mở gần nhất; số trade được hiển thị riêng.
+    int latestTradeIndex = array.size(tradeEntryIds) - 1
+    if latestTradeIndex >= 0
+        activeEntryPrice := array.get(tradeEntryPrices, latestTradeIndex)
+        activeInvalidation := array.get(tradeInvalidations, latestTradeIndex)
+        activeInitialHardStop := array.get(tradeInitialStops, latestTradeIndex)
+        activeHardStop := array.get(tradeActiveStops, latestTradeIndex)
+        activeTakeProfit := array.get(tradeTakeProfits, latestTradeIndex)
+        activeEntrySource := array.get(tradeSources, latestTradeIndex)
+        activeEntryBar := array.get(tradeEntryBars, latestTradeIndex)
+    else
+        activeEntryPrice := na
+        activeInvalidation := na
+        activeInitialHardStop := na
+        activeHardStop := na
+        activeTakeProfit := na
+        activeEntrySource := SOURCE_NONE
+        activeEntryBar := na
+    // STEP 1 — Confirmed swings.
+    newSwingHigh := not na(confirmedSwingHigh)
+    newSwingLow := not na(confirmedSwingLow)
+    if newSwingHigh
+        previousSwingHigh := lastSwingHigh
+        lastSwingHigh := confirmedSwingHigh
+    if newSwingLow
+        previousSwingLow := lastSwingLow
+        lastSwingLow := confirmedSwingLow
+
+    bool hasTwoSwingHighs = not na(lastSwingHigh) and not na(previousSwingHigh)
+    bool hasTwoSwingLows = not na(lastSwingLow) and not na(previousSwingLow)
+    bool higherHigh = hasTwoSwingHighs and lastSwingHigh > previousSwingHigh
+    bool higherLow = hasTwoSwingLows and lastSwingLow > previousSwingLow
+    bool lowerHigh = hasTwoSwingHighs and lastSwingHigh < previousSwingHigh
+    bool lowerLow = hasTwoSwingLows and lastSwingLow < previousSwingLow
+
+    // Swing bảo vệ luôn là swing cùng loại được xác nhận gần nhất của trend.
+    // Mức bảo vệ giao dịch vẫn được đóng băng riêng khi xác nhận Entry.
+    if trendState == TREND_UP and newSwingLow
+        protectedSwingLow := confirmedSwingLow
+    if trendState == TREND_DOWN and newSwingHigh
+        protectedSwingHigh := confirmedSwingHigh
+
+    bool enoughEmaData = not na(emaFast) and not na(emaSlow) and not na(emaFastSlope) and not na(positiveDeltaRatio) and not na(negativeDeltaRatio)
+    bool emaUpFilter = enoughEmaData and close > emaFast and emaFast > emaSlow and emaFastSlope > 0.0 and positiveDeltaRatio >= minPositiveRatio
+    bool emaDownFilter = enoughEmaData and close < emaFast and emaFast < emaSlow and emaFastSlope < 0.0 and negativeDeltaRatio >= minNegativeRatio
+    // Bộ lọc duy trì trend. Nhẹ hơn bộ lọc xác nhận: chỉ ràng buộc cấu trúc hai đường EMA.
+    // Không kiểm tra vị trí của Close, nên giá được phép hồi xuống dưới cả EMA34 lẫn EMA89.
+    bool emaUpMaintain = not requireTrendMaintenanceFilter or (enoughEmaData and emaFast >= emaSlow)
+    bool emaDownMaintain = not requireTrendMaintenanceFilter or (enoughEmaData and emaFast <= emaSlow)
+    // Bot 2 Step 1: độ dốc EMA34 trên confirmSlopeLength nến gần nhất phải cùng chiều trend,
+    // áp cho cả xác nhận trend mới và duy trì trend đang giữ; không thỏa thì SIDEWAY.
+    // Mốc cố định theo giá/nến (không theo ATR): dốc quá ít vẫn là SIDEWAY. minConfirmSlope = 0 -> chỉ xét dấu.
+    float confirmSlopeThreshold = minConfirmSlope
+    bool slopeConfirmUp = not na(emaFastConfirmSlope) and not na(confirmSlopeThreshold) and emaFastConfirmSlope > confirmSlopeThreshold
+    bool slopeConfirmDown = not na(emaFastConfirmSlope) and not na(confirmSlopeThreshold) and emaFastConfirmSlope < -confirmSlopeThreshold
+    bool validUpStructure = higherHigh and higherLow and close >= lastSwingLow
+    bool validDownStructure = lowerHigh and lowerLow and close <= lastSwingHigh
+    bool previousUptrendIntact = trendState == TREND_UP and not na(protectedSwingLow) and close >= protectedSwingLow
+    bool previousDowntrendIntact = trendState == TREND_DOWN and not na(protectedSwingHigh) and close <= protectedSwingHigh
+    bool uptrendRule = emaUpFilter and slopeConfirmUp and (validUpStructure or previousUptrendIntact)
+    bool downtrendRule = emaDownFilter and slopeConfirmDown and (validDownStructure or previousDowntrendIntact)
+    bool brokeProtectedLow = trendState == TREND_UP and not na(protectedSwingLow) and close < protectedSwingLow
+    bool brokeProtectedHigh = trendState == TREND_DOWN and not na(protectedSwingHigh) and close > protectedSwingHigh
+
+    int nextTrendState = trendState
+    if trendState == TREND_UP
+        // Tạm thời không dùng Close phá protected swing để làm mất trend.
+        if not (emaUpMaintain and slopeConfirmUp)
+            nextTrendState := downtrendRule ? TREND_DOWN : TREND_SIDEWAY
+    else if trendState == TREND_DOWN
+        if not (emaDownMaintain and slopeConfirmDown)
+            nextTrendState := uptrendRule ? TREND_UP : TREND_SIDEWAY
+    else
+        if uptrendRule
+            nextTrendState := TREND_UP
+        else if downtrendRule
+            nextTrendState := TREND_DOWN
+
+    enteredUptrend := nextTrendState == TREND_UP and trendState != TREND_UP
+    enteredDowntrend := nextTrendState == TREND_DOWN and trendState != TREND_DOWN
+    enteredSideway := nextTrendState == TREND_SIDEWAY and trendState != TREND_SIDEWAY
+
+    if nextTrendState == TREND_UP
+        if trendState != TREND_UP
+            protectedSwingLow := lastSwingLow
+        protectedSwingHigh := na
+    else if nextTrendState == TREND_DOWN
+        if trendState != TREND_DOWN
+            protectedSwingHigh := lastSwingHigh
+        protectedSwingLow := na
+    else
+        protectedSwingLow := na
+        protectedSwingHigh := na
+    trendState := nextTrendState
+
+    // STEP 2 — Setup chỉ dùng Close và Important Swing đã xác nhận.
+    valueZoneLongSetup := enableValueZoneSetup and trendState == TREND_UP and not na(lastSwingLow) and (close <= emaFast or close <= emaSlow) and close > lastSwingLow
+    valueZoneShortSetup := enableValueZoneSetup and trendState == TREND_DOWN and not na(lastSwingHigh) and (close >= emaFast or close >= emaSlow) and close < lastSwingHigh
+    breakoutLongSetup := enableBreakoutSetup and trendState == TREND_UP and not na(lastSwingHigh) and close > lastSwingHigh
+    breakoutShortSetup := enableBreakoutSetup and trendState == TREND_DOWN and not na(lastSwingLow) and close < lastSwingLow
+
+    newValueZoneLongSetup := valueZoneLongSetup and not previousValueZoneLong
+    newValueZoneShortSetup := valueZoneShortSetup and not previousValueZoneShort
+    newBreakoutLongSetup := breakoutLongSetup and not previousBreakoutLong
+    newBreakoutShortSetup := breakoutShortSetup and not previousBreakoutShort
+
+    // STEP 3 — Xác nhận Entry. Value Zone không được xác nhận ngay nến bắt đầu.
+    // Sau khi xác nhận, market order luôn khớp tại Open nến kế tiếp.
+
+    if pendingOrderSide != ENTRY_NONE
+        waitingValueZoneSide := ENTRY_NONE
+        valueZoneEntryEma := EMA_NONE
+    else
+        if waitingValueZoneSide == ENTRY_LONG and (trendState != TREND_UP or na(lastSwingLow) or close <= lastSwingLow)
+            waitingValueZoneSide := ENTRY_NONE
+            valueZoneEntryEma := EMA_NONE
+        else if waitingValueZoneSide == ENTRY_SHORT and (trendState != TREND_DOWN or na(lastSwingHigh) or close >= lastSwingHigh)
+            waitingValueZoneSide := ENTRY_NONE
+            valueZoneEntryEma := EMA_NONE
+
+        float valueZoneReferenceEma = valueZoneEntryEma == EMA_FAST ? emaFast : valueZoneEntryEma == EMA_SLOW ? emaSlow : na
+        bool valueZoneLongConfirmed = waitingValueZoneSide == ENTRY_LONG and trendState == TREND_UP and not na(valueZoneReferenceEma) and close > valueZoneReferenceEma and close > lastSwingLow
+        bool valueZoneShortConfirmed = waitingValueZoneSide == ENTRY_SHORT and trendState == TREND_DOWN and not na(valueZoneReferenceEma) and close < valueZoneReferenceEma and close < lastSwingHigh
+        bool maySchedule = pendingOrderSide == ENTRY_NONE and strategy.opentrades < 100 and not na(stopBuffer)
+
+        // Bot 2: slot theo loại setup. Mảng tradeSources đã được đối soát ở Step 0,
+        // nên lệnh bị stop/TP trong nến này đã giải phóng slot của nó.
+        int openBreakoutTrades = 0
+        int openValueZoneTrades = 0
+        if array.size(tradeSources) > 0
+            for sourceIndex = 0 to array.size(tradeSources) - 1
+                int tradeSource = array.get(tradeSources, sourceIndex)
+                openBreakoutTrades += tradeSource == SOURCE_BREAKOUT ? 1 : 0
+                openValueZoneTrades += tradeSource == SOURCE_VALUE_ZONE ? 1 : 0
+        bool breakoutSlotFree = maxTradesPerSetup <= 0 or openBreakoutTrades < maxTradesPerSetup
+        bool valueZoneSlotFree = maxTradesPerSetup <= 0 or openValueZoneTrades < maxTradesPerSetup
+
+        int scheduledSide = ENTRY_NONE
+        int scheduledSource = SOURCE_NONE
+        if maySchedule
+            if newBreakoutLongSetup and breakoutSlotFree
+                scheduledSide := ENTRY_LONG
+                scheduledSource := SOURCE_BREAKOUT
+            else if newBreakoutShortSetup and breakoutSlotFree
+                scheduledSide := ENTRY_SHORT
+                scheduledSource := SOURCE_BREAKOUT
+            else if valueZoneLongConfirmed and valueZoneSlotFree
+                scheduledSide := ENTRY_LONG
+                scheduledSource := SOURCE_VALUE_ZONE
+            else if valueZoneShortConfirmed and valueZoneSlotFree
+                scheduledSide := ENTRY_SHORT
+                scheduledSource := SOURCE_VALUE_ZONE
+
+        // Chỉ mở chồng khi cùng chiều với vị thế hiện tại; không tự đảo chiều.
+        bool sameDirection = strategy.position_size == 0 or (scheduledSide == ENTRY_LONG and strategy.position_size > 0) or (scheduledSide == ENTRY_SHORT and strategy.position_size < 0)
+        if scheduledSide != ENTRY_NONE and not sameDirection
+            scheduledSide := ENTRY_NONE
+            scheduledSource := SOURCE_NONE
+
+        float frozenSwing = scheduledSide == ENTRY_LONG ? protectedSwingLow : scheduledSide == ENTRY_SHORT ? protectedSwingHigh : na
+        if scheduledSide != ENTRY_NONE and not na(frozenSwing)
+            // Frozen Swing và hard stop được chốt tại nến xác nhận. TP chỉ được
+            // tính sau khi biết giá khớp thực tế tại Open nến kế tiếp.
+            float hardStopPrice = scheduledSide == ENTRY_LONG ? frozenSwing - stopBuffer : frozenSwing + stopBuffer
+            // TradingView phải biết qty trước khi Open kế tiếp xuất hiện. Với mô
+            // hình % vốn, Pine dùng Close tín hiệu để ước tính qty; Python tính
+            // chính xác lại từ Open thực tế.
+            float estimatedRiskDistance = math.abs(close - hardStopPrice)
+            float riskCapital = strategy.equity * riskPerTradePercent / 100.0
+            float rawQuantity = estimatedRiskDistance > 0.0 ? riskCapital / estimatedRiskDistance : na
+            float steppedQuantity = quantityStep > 0.0 and not na(rawQuantity) ? math.floor(rawQuantity / quantityStep) * quantityStep : rawQuantity
+            float cappedQuantity = maximumQuantity > 0.0 and not na(steppedQuantity) ? math.min(steppedQuantity, maximumQuantity) : steppedQuantity
+            float sizedQuantity = riskModel == "Khối lượng cố định" ? fixedPositionSize : cappedQuantity
+            if estimatedRiskDistance > 0.0 and not na(sizedQuantity) and sizedQuantity > 0.0
+                pendingOrderSide := scheduledSide
+                pendingOrderSource := scheduledSource
+                pendingSignalBar := bar_index
+                pendingInvalidation := frozenSwing
+                pendingHardStop := hardStopPrice
+                pendingQuantity := sizedQuantity
+                pendingEntryId := (scheduledSide == ENTRY_LONG ? "Long " : "Short ") + str.tostring(nextEntryNumber)
+                nextEntryNumber += 1
+                waitingValueZoneSide := ENTRY_NONE
+                valueZoneEntryEma := EMA_NONE
+                longEntryScheduled := scheduledSide == ENTRY_LONG
+                shortEntryScheduled := scheduledSide == ENTRY_SHORT
+                if scheduledSide == ENTRY_LONG
+                    strategy.entry(pendingEntryId, strategy.long, qty = sizedQuantity, comment = f_source_text(scheduledSource), alert_message = "LONG_NEXT_OPEN_ENTRY")
+                else
+                    strategy.entry(pendingEntryId, strategy.short, qty = sizedQuantity, comment = f_source_text(scheduledSource), alert_message = "SHORT_NEXT_OPEN_ENTRY")
+        else if newValueZoneLongSetup
+            waitingValueZoneSide := ENTRY_LONG
+            valueZoneEntryEma := close <= emaSlow ? EMA_SLOW : EMA_FAST
+        else if newValueZoneShortSetup
+            waitingValueZoneSide := ENTRY_SHORT
+            valueZoneEntryEma := close >= emaSlow ? EMA_SLOW : EMA_FAST
+
+    // STEP 4 — Mất trend: thoát ngay tại Close.
+    // Bot 2: mặc định chỉ đóng khi trend ĐẢO CHIỀU (Long gặp DOWNTREND, Short gặp UPTREND);
+    // trend về SIDEWAY chỉ đóng khi bật "Thoát lệnh khi mất trend" (bot gốc).
+    // Hard stop đã nằm sẵn trên sàn nên vẫn ưu tiên khớp trong nến. Rule thoát riêng
+    // khi Close phá swing giao dịch đã đóng băng hiện tạm thời bị vô hiệu hóa.
+    bool longTrendLost = strategy.position_size > 0 and ((exitOnTrendReversal and trendState == TREND_DOWN) or (exitOnTrendLoss and trendState != TREND_UP))
+    bool shortTrendLost = strategy.position_size < 0 and ((exitOnTrendReversal and trendState == TREND_UP) or (exitOnTrendLoss and trendState != TREND_DOWN))
+    bool closedAtBarClose = false
+    if longTrendLost
+        strategy.close_all(immediately = true, comment = "Trend lost", alert_message = "LONG_TREND_LOST_CLOSE")
+        closedAtBarClose := true
+    else if shortTrendLost
+        strategy.close_all(immediately = true, comment = "Trend lost", alert_message = "SHORT_TREND_LOST_CLOSE")
+        closedAtBarClose := true
+
+    // Lệnh đóng ngay tại Close của nến này, nhưng strategy.position_size chỉ đổi ở lần
+    // tính sau. Dọn state ngay tại đây để khối đối soát không ghi nhận muộn một nến,
+    // và để nến kế tiếp được phép đặt lệnh mới.
+    if closedAtBarClose
+        activeEntryPrice := na
+        activeInvalidation := na
+        activeInitialHardStop := na
+        activeHardStop := na
+        activeTakeProfit := na
+        activeEntrySource := SOURCE_NONE
+        activeEntryBar := na
+        array.clear(tradeEntryIds)
+        array.clear(tradeSides)
+        array.clear(tradeEntryPrices)
+        array.clear(tradeInvalidations)
+        array.clear(tradeInitialStops)
+        array.clear(tradeActiveStops)
+        array.clear(tradeTakeProfits)
+        array.clear(tradeSources)
+        array.clear(tradeEntryBars)
+        lastExitBar := bar_index
+        lastClosedTrades := strategy.closedtrades
+
+    previousValueZoneLong := valueZoneLongSetup
+    previousValueZoneShort := valueZoneShortSetup
+    previousBreakoutLong := breakoutLongSetup
+    previousBreakoutShort := breakoutShortSetup
+    lastProcessedBar := bar_index
+
+// =============================================================================
+// OUTPUTS
+// =============================================================================
+
+// Hai EMA được tích hợp trực tiếp trong strategy. Không cần thêm EMA rời trên chart.
+plot(showEmaLines ? emaFast : na, "EMA nhanh tích hợp", color = color.orange, linewidth = 2)
+plot(showEmaLines ? emaSlow : na, "EMA chậm tích hợp", color = color.blue, linewidth = 2)
+
+plotshape(showSwings and newSwingHigh, title = "Swing High", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.tiny, offset = -pivotLegs, text = "SH", textcolor = color.red)
+plotshape(showSwings and newSwingLow, title = "Swing Low", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny, offset = -pivotLegs, text = "SL", textcolor = color.lime)
+plotshape(showSetups and newValueZoneLongSetup, title = "Value Zone Long Setup", style = shape.labelup, location = location.belowbar, color = color.teal, size = size.tiny, text = "VZ-L", textcolor = color.white)
+plotshape(showSetups and newValueZoneShortSetup, title = "Value Zone Short Setup", style = shape.labeldown, location = location.abovebar, color = color.purple, size = size.tiny, text = "VZ-S", textcolor = color.white)
+plotshape(showSetups and newBreakoutLongSetup, title = "Breakout Long Setup", style = shape.labelup, location = location.belowbar, color = color.green, size = size.tiny, text = "BO-L", textcolor = color.white)
+plotshape(showSetups and newBreakoutShortSetup, title = "Breakout Short Setup", style = shape.labeldown, location = location.abovebar, color = color.maroon, size = size.tiny, text = "BO-S", textcolor = color.white)
+plotshape(showEntries and longEntryScheduled, title = "Long Next-Open Entry", style = shape.labelup, location = location.belowbar, color = color.lime, size = size.small, text = "BUY NEXT", textcolor = color.black)
+plotshape(showEntries and shortEntryScheduled, title = "Short Next-Open Entry", style = shape.labeldown, location = location.abovebar, color = color.red, size = size.small, text = "SELL NEXT", textcolor = color.white)
+
+plot(showProtection and trendState == TREND_UP ? protectedSwingLow : na, "Protected Swing Low", color = color.lime, linewidth = 2, style = plot.style_stepline)
+plot(showProtection and trendState == TREND_DOWN ? protectedSwingHigh : na, "Protected Swing High", color = color.red, linewidth = 2, style = plot.style_stepline)
+plot(showRiskLevels and strategy.position_size != 0 ? activeHardStop : showRiskLevels and pendingOrderSide != ENTRY_NONE ? pendingHardStop : na, "Active Stop", color = color.red, linewidth = 2, style = plot.style_linebr)
+plot(showRiskLevels and strategy.position_size != 0 ? activeTakeProfit : na, "Take Profit", color = color.aqua, linewidth = 2, style = plot.style_linebr)
+plot(showRiskLevels and strategy.position_size != 0 ? activeInvalidation : showRiskLevels and pendingOrderSide != ENTRY_NONE ? pendingInvalidation : na, "Frozen Protected Swing", color = color.yellow, linewidth = 1, style = plot.style_linebr)
+
+color trendBackground = trendState == TREND_UP ? color.new(color.green, 88) : trendState == TREND_DOWN ? color.new(color.red, 88) : color.new(color.gray, 94)
+bgcolor(showBackground ? trendBackground : na, title = "Trend State Background")
+
+plot(trendState, "Trend State", display = display.data_window)
+plot(emaFastSlope, "EMA Slope", display = display.data_window)
+plot(emaFastConfirmSlope, "EMA Confirm Slope (Bot 2)", display = display.data_window)
+plot(minConfirmSlope, "Confirm Slope Threshold (Bot 2)", display = display.data_window)
+plot(positiveDeltaRatio, "Positive Delta Ratio", display = display.data_window)
+plot(negativeDeltaRatio, "Negative Delta Ratio", display = display.data_window)
+plot(activeEntryPrice, "Active Entry Price", display = display.data_window)
+plot(activeHardStop, "Active Hard Stop", display = display.data_window)
+plot(activeTakeProfit, "Active Take Profit", display = display.data_window)
+
+var table dashboard = table.new(position.top_right, 2, 16, border_width = 1)
+if barstate.islast and dashboardMode == "Full"
+    string currentSetup = f_setup_text(valueZoneLongSetup, valueZoneShortSetup, breakoutLongSetup, breakoutShortSetup)
+    string positionText = strategy.position_size > 0 ? "LONG × " + str.tostring(strategy.opentrades) : strategy.position_size < 0 ? "SHORT × " + str.tostring(strategy.opentrades) : "FLAT"
+    table.clear(dashboard, 0, 0, 1, 15)
+    table.cell(dashboard, 0, 0, "STEPS 1–7", bgcolor = color.black, text_color = color.white)
+    table.cell(dashboard, 1, 0, "STRATEGY", bgcolor = color.black, text_color = color.white)
+    table.cell(dashboard, 0, 1, "Trend")
+    table.cell(dashboard, 1, 1, f_trend_text(trendState))
+    table.cell(dashboard, 0, 2, "Setup")
+    table.cell(dashboard, 1, 2, currentSetup)
+    table.cell(dashboard, 0, 3, "Waiting VZ")
+    table.cell(dashboard, 1, 3, f_side_text(waitingValueZoneSide))
+    table.cell(dashboard, 0, 4, "Pending order")
+    table.cell(dashboard, 1, 4, f_side_text(pendingOrderSide))
+    table.cell(dashboard, 0, 15, "Entry timing")
+    table.cell(dashboard, 1, 15, pendingOrderSide != ENTRY_NONE ? "NEXT OPEN" : "—")
+    table.cell(dashboard, 0, 5, "Position")
+    table.cell(dashboard, 1, 5, positionText)
+    table.cell(dashboard, 0, 6, "Entry source")
+    table.cell(dashboard, 1, 6, f_source_text(activeEntrySource))
+    table.cell(dashboard, 0, 7, "Entry price")
+    table.cell(dashboard, 1, 7, f_price_text(activeEntryPrice))
+    table.cell(dashboard, 0, 8, "Frozen swing")
+    table.cell(dashboard, 1, 8, f_price_text(activeInvalidation))
+    table.cell(dashboard, 0, 9, "Active stop")
+    table.cell(dashboard, 1, 9, f_price_text(activeHardStop))
+    table.cell(dashboard, 0, 10, "Take profit")
+    table.cell(dashboard, 1, 10, f_price_text(activeTakeProfit))
+    table.cell(dashboard, 0, 11, "TP multiple")
+    table.cell(dashboard, 1, 11, str.tostring(TAKE_PROFIT_R_MULTIPLE, "#.##") + "R (FIXED)")
+    table.cell(dashboard, 0, 12, "Quantity")
+    table.cell(dashboard, 1, 12, str.tostring(strategy.position_size != 0 ? math.abs(strategy.position_size) : nz(pendingQuantity, 0.0), "#.####") + (riskModel == "Khối lượng cố định" ? " (cố định)" : " (" + str.tostring(riskPerTradePercent, "#.##") + "% vốn)"))
+    table.cell(dashboard, 0, 13, "Add / pyramiding")
+    table.cell(dashboard, 1, 13, maxTradesPerSetup > 0 ? "MAX " + str.tostring(maxTradesPerSetup) + "/SETUP · " + str.tostring(strategy.opentrades) + " OPEN" : "MULTI-ENTRY")
+    table.cell(dashboard, 0, 14, "Trend guard")
+    table.cell(dashboard, 1, 14, (requireTrendMaintenanceFilter ? "EMA34/EMA89" : "OFF") + " + slope" + str.tostring(confirmSlopeLength) + (minConfirmSlope > 0.0 ? " >" + str.tostring(minConfirmSlope, "#.##") : "") + (exitOnTrendLoss ? " + exit" : exitOnTrendReversal ? " + rev" : ""))
+else if barstate.islast and dashboardMode == "Lite"
+    string currentSetup = f_setup_text(valueZoneLongSetup, valueZoneShortSetup, breakoutLongSetup, breakoutShortSetup)
+    string positionText = strategy.position_size > 0 ? "LONG × " + str.tostring(strategy.opentrades) : strategy.position_size < 0 ? "SHORT × " + str.tostring(strategy.opentrades) : "FLAT"
+    string pendingText = pendingOrderSide != ENTRY_NONE ? f_side_text(pendingOrderSide) + " NEXT" : waitingValueZoneSide != ENTRY_NONE ? "WAIT " + f_side_text(waitingValueZoneSide) : "NONE"
+    color positionColor = strategy.position_size > 0 ? color.new(color.green, 65) : strategy.position_size < 0 ? color.new(color.red, 65) : color.new(color.gray, 75)
+    table.clear(dashboard, 0, 0, 1, 15)
+    table.cell(dashboard, 0, 0, "BOT LITE", bgcolor = color.black, text_color = color.white)
+    table.cell(dashboard, 1, 0, f_trend_text(trendState), bgcolor = trendState == TREND_UP ? color.new(color.green, 65) : trendState == TREND_DOWN ? color.new(color.red, 65) : color.new(color.gray, 75), text_color = color.white)
+    table.cell(dashboard, 0, 1, "Setup")
+    table.cell(dashboard, 1, 1, currentSetup)
+    table.cell(dashboard, 0, 2, "Position")
+    table.cell(dashboard, 1, 2, positionText, bgcolor = positionColor, text_color = color.white)
+    table.cell(dashboard, 0, 3, "Signal")
+    table.cell(dashboard, 1, 3, pendingText)
+    table.cell(dashboard, 0, 4, "Entry")
+    table.cell(dashboard, 1, 4, strategy.position_size != 0 ? f_price_text(activeEntryPrice) : pendingOrderSide != ENTRY_NONE ? "NEXT OPEN" : "—")
+    table.cell(dashboard, 0, 5, "Stop")
+    table.cell(dashboard, 1, 5, f_price_text(strategy.position_size != 0 ? activeHardStop : pendingHardStop), text_color = color.red)
+    table.cell(dashboard, 0, 6, "TP " + str.tostring(TAKE_PROFIT_R_MULTIPLE, "#.##") + "R")
+    table.cell(dashboard, 1, 6, f_price_text(activeTakeProfit), text_color = color.aqua)
+else if barstate.islast
+    table.clear(dashboard, 0, 0, 1, 15)
+
+if enteredUptrend
+    alert("Step 1 Trend: UPTREND", alert.freq_once_per_bar_close)
+else if enteredDowntrend
+    alert("Step 1 Trend: DOWNTREND", alert.freq_once_per_bar_close)
+else if enteredSideway
+    alert("Step 1 Trend: SIDEWAY", alert.freq_once_per_bar_close)
+
+if longEntryScheduled
+    alert("Step 3: xác nhận LONG | mua tại Open nến kế tiếp | stop " + f_price_text(pendingHardStop) + " | TP tính từ giá khớp thực tế", alert.freq_once_per_bar_close)
+else if shortEntryScheduled
+    alert("Step 3: xác nhận SHORT | bán tại Open nến kế tiếp | stop " + f_price_text(pendingHardStop) + " | TP tính từ giá khớp thực tế", alert.freq_once_per_bar_close)

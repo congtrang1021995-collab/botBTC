@@ -1,0 +1,213 @@
+# Investment System Bot 2 (bot mới, rule đang xây)
+
+Thư mục này là bản sao độc lập của bot gốc tại thời điểm 2026-09-24 (spec v1.5,
+Pine v3.2), dùng làm nền để xây bộ rule mới. Bot gốc ở thư mục cha đã khóa rule và
+chỉ dùng để đối chiếu. Bot 2 giữ toàn bộ rule cũ và bổ sung từng điều kiện mới.
+
+Mọi lệnh bên dưới chạy từ trong thư mục `bot2/`. Dữ liệu giá dùng chung với bot gốc
+ở `../Dữ liệu/`, ví dụ:
+
+```bash
+python -m trading_bot.backtest "../Dữ liệu/XAU/XAU-USD_1Hour_BID_2025-01-01_to_2025-01-31_Etc_UTC.csv"
+```
+
+```bash
+python data/chart_template/build_chart.py "../Dữ liệu/XAU" --symbol XAU/USD --tf H1
+```
+
+**Dữ liệu Binance thực tế** (API public, không cần key; mặc định BTCUSDT H1 Spot,
+thêm `--market futures` để dùng USDT-M Futures). Chỉ lấy nến đã đóng.
+
+```bash
+python -m trading_bot.data BTCUSDT --interval 1h --days 365
+```
+
+Lệnh trên lưu `data/binance/btcusdt_1h_spot.csv`, dùng thẳng cho backtest và chart.
+Theo dõi tín hiệu realtime: engine làm nóng bằng 1000 nến gần nhất, rồi mỗi khi có nến
+đóng thì in trend/setup/sự kiện. Chế độ này **không đặt lệnh thật**; `--log` ghi sự kiện
+ra JSONL, còn `--once` chỉ in trạng thái hiện tại.
+
+```bash
+python -m trading_bot.live BTCUSDT --interval 1h --log outputs/live_btcusdt_1h.jsonl
+```
+
+**Chart live** (Trade Explorer với giá cập nhật liên tục): bấm đúp `live_chart.bat` hoặc
+chạy lệnh dưới, trình duyệt mở `http://localhost:8765`. Mặc định BTCUSDT Futures H1 từ
+2025-01-01. Nến đang chạy và EMA tạm tính nhảy theo WebSocket Binance (bị chặn thì tự
+chuyển sang REST mỗi 2 giây). Mỗi khi nến đóng, Bot2 chạy lại bằng code hiện tại và
+danh sách lệnh tự cập nhật. Chỉ theo dõi, không đặt lệnh.
+
+```bash
+python data/chart_template/live_server.py --market futures --interval 1h
+```
+
+**Chart live trên GitHub Pages** (https://congtrang1021995-collab.github.io/botBTC/): không cần
+server. Trình duyệt người xem tự tải nến Binance Futures, chạy chính code Python Bot2 bằng
+Pyodide (`web/worker.js`) và nhận giá realtime qua WebSocket; nến đóng thì Bot2 tính lại. Mỗi
+lần push lên `main`, GitHub Actions chạy test, dựng `_site/` bằng `web/build_site.py` rồi
+đăng lên Pages, nên sửa rule xong push là trang dùng rule mới. Tham số URL tùy chọn:
+`?symbol=ETHUSDT&interval=4h&market=spot&start=2025-06-01`. Người xem cần truy cập được
+Binance (bị chặn ở Mỹ). Xem thử trên máy: `python web/build_site.py` rồi
+`python -m http.server 8766 --directory _site`.
+
+**Điều kiện mới đã chốt**
+
+- 2026-09-24 — Step 1 v1.6: độ dốc EMA34 (OLS) trên 13 nến gần nhất phải cùng chiều
+  trend, áp cho cả xác nhận trend mới và duy trì trend; không thỏa thì `SIDEWAY`.
+  Input `confirm_slope_length=13` (Python) / `n2` (Pine); ban đầu 7, đổi thành 13 cùng
+  ngày sau khi soát BTC H1 (7 nến làm mất trend ngay khi giá kéo về EMA34). Rule cũ giữ nguyên.
+- 2026-09-24 — Step 1 v1.6 (bổ sung): độ dốc so với một **mốc cố định**
+  `min_confirm_slope` (đơn vị giá/nến, từng mặc định `5` cho BTC H1). Ngưỡng theo ATR
+  (`0.06 × ATR`) đã bỏ cùng ngày.
+- 2026-09-25 — Step 1 v1.7: `min_confirm_slope` mặc định **0** (chỉ xét dấu độ dốc 13
+  nến, không cần mốc 5; input vẫn giữ để thử) và `k` pivot nâng **3 → 5** nến mỗi bên
+  (`pivot_legs=5`, Pine `k`). Các step khác giữ nguyên.
+- 2026-09-24 — Step 4: giữ rule **đảo chiều trend thì đóng lệnh** tại Close
+  (`exit_on_trend_reversal=True`, Pine: `Thoát lệnh khi trend đảo chiều`); trend về
+  SIDEWAY không đóng lệnh (`exit_on_trend_loss=False` mặc định, bật để đóng cả khi
+  SIDEWAY như bot gốc). Lý do thoát mới: `TREND_REVERSAL_CLOSE_EXIT`.
+- 2026-09-24 — Step 3/6: tối đa 2 lệnh nắm giữ, mỗi loại setup (Breakout / Value
+  Zone) 1 lệnh. `max_trades_per_setup_family=1` (Pine: `Số lệnh mở tối đa mỗi loại
+  setup`); đặt `0` để bỏ giới hạn. Slot xét sau khi lệnh bị stop/TP trong nến đã đóng.
+
+---
+
+Phần dưới đây kế thừa README của bot gốc, mô tả rule đang chạy trong code này.
+
+Implementation Python theo kiến trúc module cho hệ thống trong
+`01_TRADING_BOT_SPEC.md`. File `02_TRADING_BOT.pine` được giữ làm bản đối chiếu
+trực quan trên TradingView.
+
+## Trạng thái
+
+- Step 1 — Trend: đã triển khai, kèm bộ lọc duy trì trend (spec mục 8.1). Uptrend
+  chỉ mất khi `EMA34 < EMA89`, downtrend chỉ mất khi `EMA34 > EMA89`; hai EMA bằng
+  nhau chưa làm mất trend và Close phá Protected Swing tạm thời không làm đổi trend.
+  **Bot 2 (v1.6):** thêm điều kiện bắt buộc độ dốc EMA34 trên 13 nến gần nhất
+  (`confirm_slope_length=13`) phải cùng chiều trend ở cả xác nhận và duy trì; dốc bằng 0
+  hoặc ngược chiều thì `SIDEWAY`. Mốc `min_confirm_slope` mặc định 0 (chỉ xét dấu), đặt > 0
+  để đòi dốc vượt mốc. Pivot dùng `pivot_legs=5`. Điều kiện này không tắt được bằng
+  `require_trend_maintenance_filter=False`.
+  Tắt bộ lọc EMA bằng
+  `require_trend_maintenance_filter=False` (Python) hoặc bỏ chọn `Chỉ giữ trend khi
+  EMA34/EMA89 chưa cắt ngược` (Pine); khi đó Step 1 tiếp tục giữ trend hiện tại.
+- Step 2 — Setup: đã triển khai.
+- Step 3 — Entry: Value Zone chờ Close lấy lại EMA đã ghi nhớ; Breakout xác nhận
+  khi setup chuyển `FALSE -> TRUE`. Cả hai vào lệnh tại Open nến kế tiếp. Mỗi tín
+  hiệu hợp lệ mở một giao dịch độc lập. **Bot 2:** mỗi loại setup chỉ giữ 1 lệnh
+  đang mở, nên tối đa 2 lệnh (1 Breakout + 1 Value Zone); tín hiệu của loại đã có
+  lệnh mở bị bỏ qua. Không còn dùng stop-entry tại đỉnh/đáy nến xác nhận ± 1 tick.
+- Step 4 — Invalidation: đã triển khai hard stop. **Bot 2 đóng lệnh tại Close khi trend
+  đảo chiều** (`exit_on_trend_reversal=True`); trend về SIDEWAY không đóng lệnh
+  (`exit_on_trend_loss=False` mặc định, bật để đóng như bot gốc).
+  Rule thoát riêng khi Close phá Protected Swing đã đóng băng hiện tạm thời bị vô
+  hiệu hóa. Stop được dời theo lợi nhuận: vượt 1R về Entry, vượt 2R lên +1R,
+  vượt 3R lên +2R, ... vượt 9R lên +8R (Bot 2, 2026-09-28: vượt nR -> +(n-1)R,
+  n = 1..9). Tắt quy tắc mất trend bằng
+  `exit_on_trend_loss=False`.
+- Step 5 — Position Size: mặc định `fixed_quantity` — mọi lệnh cùng một khối lượng.
+  Có sẵn `fixed_risk` (suy khối lượng từ `risk_per_trade_fraction` và khoảng cách từ
+  giá Open thực tế tới hard stop) nhưng chưa bật.
+- Step 6 — Multiple Entries: cho phép giao dịch cùng chiều chồng nhau trong giới
+  hạn **tối đa 2 lệnh, mỗi loại setup 1 lệnh** (Bot 2). Mỗi giao dịch giữ riêng giá
+  vào, stop, TP, khối lượng và P&L; module Add vẫn không tự tăng khối lượng của
+  một giao dịch cũ.
+- Step 7 — Exit: Take Profit cố định 10R (Bot 2, 2026-09-28; trước đó 5R) tính từ giá Open thực tế của nến vào
+  lệnh; không chốt từng phần.
+- Step 8 — Backtest & P&L: sổ giao dịch, P&L bằng tiền, R-multiple, max drawdown
+  theo R, cùng bộ thống kê tỷ lệ lệnh (win rate, loss rate, lãi/lỗ trung bình,
+  payoff ratio, expectancy, chuỗi thắng/thua dài nhất) và bảng tách theo loại setup,
+  theo hướng lệnh, theo lý do thoát.
+- Step 9 — Historical Data: đã đọc được CSV OHLC và xuất summary JSON/trade log.
+- Backtest không tính phí giao dịch và trượt giá.
+- Chưa đặt lệnh thật.
+
+## Kiến trúc
+
+```text
+trading_bot/
+  config.py
+  core/
+    models.py
+    indicators.py
+    swings.py
+    engine.py
+  strategy/
+    trend.py
+    setup.py
+    entry.py
+    invalidation.py
+    position_size.py
+    add.py
+    exit.py
+  backtest/
+    runner.py
+    metrics.py
+tests/
+```
+
+`TradingEngine` là nơi duy nhất commit state. Mỗi module strategy là hàm thuần:
+nhận context/state và trả decision. `BarContext` chỉ tồn tại cho nến hiện tại;
+`StrategyState` được giữ xuyên suốt quá trình chạy.
+
+## Chạy test
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Project hiện chỉ dùng Python standard library.
+
+## Chạy backtest với CSV
+
+File đầu vào cần các cột `open,high,low,close`; có thể thêm `timestamp` theo
+ISO-8601 và `volume`.
+
+```bash
+python -m trading_bot.backtest data.csv --trades-out trades.csv
+```
+
+Summary được in dạng JSON. Tham số `--trades-out` là tùy chọn.
+
+## Dùng trên TradingView
+
+`02_TRADING_BOT.pine` là một strategy duy nhất và chỉ chiếm một suất chỉ báo trên
+biểu đồ. EMA 34, EMA 89 và ATR 13 đã được tính ngay trong strategy;
+không cần thêm chỉ báo rời. Với gói Basic, hãy xóa các EMA rời trước khi thêm bot.
+
+Bar Magnifier được tắt vì dữ liệu khung nhỏ dùng cho tính năng này yêu cầu gói
+TradingView cao hơn. Strategy vẫn mô phỏng lệnh theo dữ liệu OHLC của khung thời
+gian đang mở.
+
+Từ bản `v2.8 Basic`, tín hiệu được xác nhận tại Close và market order khớp tại
+Open nến kế tiếp. `calc_on_order_fills` được bật để lấy giá khớp thực tế, sau đó
+tính 1R/TP và đặt bracket stop/TP.
+
+Bản `v2.9 Basic` thêm trailing stop theo ba mốc 0,5R / 1R / 1,2R. `1R` luôn
+được đo từ Entry tới hard stop ban đầu; stop mới được tính khi nến đóng và có hiệu
+lực từ nến kế tiếp.
+
+Bản `v3.0 Basic` nâng TP lên 2,6R và thay trailing bằng hai mốc: vượt 1R đưa
+stop về Entry, vượt 2R đưa stop lên +1R.
+
+Bản `v3.1 Basic` nâng TP lên 5R và nối dài trailing: vượt 3R đưa stop lên +2R,
+vượt 4R đưa stop lên +3R; hai mốc 1R và 2R được giữ nguyên.
+
+Bản `v3.2 Basic` cho phép mỗi tín hiệu hợp lệ mở thêm một giao dịch cùng chiều.
+Mỗi giao dịch dùng ID, hard stop, trailing stop và TP riêng; Pine đặt giới hạn
+pyramiding mặc định là 100 giao dịch mở cùng chiều.
+
+Bản `v2.5 Basic` từng thêm mô hình khối lượng theo rủi ro và trần gap; trần gap đã
+được loại bỏ ở v2.8 khi chuyển sang Entry tại Open nến kế tiếp.
+Bản `v2.6 Basic` thêm quy tắc thoát lệnh khi mất trend.
+
+Lưu ý TradingView: market order phải nhận quantity trước khi Open nến kế tiếp tồn
+tại. Vì vậy chế độ `% vốn` trong Pine ước tính quantity bằng Close nến xác nhận;
+Python tính chính xác quantity từ Open thực tế. Mô hình `fixed_quantity` khớp hoàn
+toàn giữa hai bản.
+
+Phí giao dịch và trượt giá nằm ở tab Properties của strategy trên TradingView.
+Backtest Python không mô phỏng phí, nên hai bên chỉ khớp khi để Properties bằng 0.
+
+Hai đường EMA tích hợp được hiển thị mặc định. Có thể tắt chúng bằng tùy chọn
+`Hiện EMA 34/89 tích hợp` mà không làm thay đổi logic giao dịch.
