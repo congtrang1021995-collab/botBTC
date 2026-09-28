@@ -5,7 +5,7 @@
 //   2. seed GitHub tính sẵn hằng ngày (web/build_seeds.py) — lịch sử dài, không phải chạy lại;
 //   3. không có cả hai (vd. ?start= sớm hơn seed): tải nến song song rồi chạy Bot2 từ đầu.
 // Sau đó chỉ tải nến mới đóng và Bot2 chỉ tính thêm các nến đó.
-// Tham số URL tùy chọn: ?interval=15m&start=2023-01-01&symbol=ETHUSDT&market=spot
+// Tham số URL tùy chọn: ?interval=15m&start=2023-01-01&symbol=XAUUSDT&market=spot
 (function(){
 const q = new URLSearchParams(location.search);
 // Lịch sử mặc định khi KHÔNG có seed (chạy hoàn toàn trong trình duyệt nên giữ ngắn).
@@ -16,6 +16,8 @@ const TFS = {
   '4h':  {label:'4h',   name:'H4',  ms:144e5, start:'2022-01-01'},
   '1d':  {label:'Ngày', name:'D1',  ms:864e5, start:'2019-01-01'},
 };
+// Tài sản có nút chọn trên trang (mã khác vẫn mở được bằng ?symbol=, chỉ không có seed).
+const ASSETS = {BTCUSDT: 'BTC', XAUUSDT: 'Vàng XAU'};
 const SYMBOL = (q.get('symbol') || 'BTCUSDT').toUpperCase();
 const MARKET = q.get('market') === 'spot' ? 'spot' : 'futures';
 const START_PARAM = q.get('start');
@@ -56,10 +58,10 @@ const store = (() => {
   };
 })();
 
-// ---- seed GitHub (chỉ Futures BTCUSDT) ----
-const seedIndex = (SYMBOL === 'BTCUSDT' && MARKET === 'futures')
+// ---- seed GitHub (chỉ Futures, các mã trong web/build_seeds.py) ----
+const seedIndex = MARKET === 'futures'
   ? fetch(`seed/index.json?v=${VERSION}`).then(r => r.ok ? r.json() : null)
-      .then(ix => ix && ix.version === VERSION ? ix.seeds : null).catch(() => null)
+      .then(ix => ix && ix.version === VERSION ? ix.seeds[SYMBOL] || null : null).catch(() => null)
   : Promise.resolve(null);
 
 // ---- trạng thái ----
@@ -78,6 +80,18 @@ document.querySelector('.bar').prepend(tfGroup);
 tfGroup.addEventListener('click', e => {
   const b = e.target.closest('[data-tf]');
   if (b && (!cur || b.dataset.tf !== cur.tf)) show(b.dataset.tf);
+});
+// Đổi tài sản = tải lại trang với ?symbol= mới (giữ khung đang xem).
+const assetGroup = document.createElement('div');
+assetGroup.className = 'grp'; assetGroup.setAttribute('role', 'group'); assetGroup.setAttribute('aria-label', 'Tài sản');
+assetGroup.innerHTML = '<span class="lab">Tài sản</span>' + Object.entries(ASSETS).map(([k, name]) =>
+  `<button class="btn" data-sym="${k}" aria-pressed="${k === SYMBOL}">${name}</button>`).join('');
+document.querySelector('.bar').prepend(assetGroup);
+assetGroup.addEventListener('click', e => {
+  const b = e.target.closest('[data-sym]');
+  if (!b || b.dataset.sym === SYMBOL) return;
+  const p = new URLSearchParams(location.search); p.set('symbol', b.dataset.sym); p.delete('start');
+  location.search = p.toString();
 });
 const box = document.createElement('div');
 box.className = 'kpi live'; box.dataset.s = 'off';

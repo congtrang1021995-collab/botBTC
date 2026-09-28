@@ -32,8 +32,8 @@ from incremental import IncrementalChart  # noqa: E402
 from trading_bot.core.models import Bar  # noqa: E402
 
 ARCHIVE = "https://data.binance.vision/data/futures/um"
-SYMBOL = "BTCUSDT"
-ARCHIVE_START = date(2020, 1, 1)   # kho futures có file tháng từ 01/2020
+# Mã có seed và ngày sớm nhất có dữ liệu (BTC: kho futures từ 01/2020; XAU: niêm yết 11/12/2025).
+SYMBOLS = {"BTCUSDT": date(2020, 1, 1), "XAUUSDT": date(2025, 12, 1)}
 # Lịch sử seed mỗi khung: "days" = số ngày gần nhất, "start" = từ ngày cố định.
 SEEDS = {
     "5m": {"days": 270},
@@ -71,10 +71,10 @@ def _rows(blob: bytes | None) -> list[list]:
     return out
 
 
-def download(interval: str, start: date, pool: ThreadPoolExecutor) -> list[list]:
+def download(symbol: str, interval: str, start: date, pool: ThreadPoolExecutor) -> list[list]:
     """Tháng đã có file tháng thì dùng file tháng; tháng hiện tại/tháng chưa có thì ghép file ngày."""
     today = datetime.now(timezone.utc).date()
-    base = f"{ARCHIVE}/monthly/klines/{SYMBOL}/{interval}/{SYMBOL}-{interval}"
+    base = f"{ARCHIVE}/monthly/klines/{symbol}/{interval}/{symbol}-{interval}"
     months, cursor = [], date(start.year, start.month, 1)
     while cursor <= today:
         months.append(cursor)
@@ -85,7 +85,7 @@ def download(interval: str, start: date, pool: ThreadPoolExecutor) -> list[list]
         if blob is None:
             day = month
             while day.month == month.month and day < today:
-                urls.append(f"{ARCHIVE}/daily/klines/{SYMBOL}/{interval}/{SYMBOL}-{interval}-{day:%Y-%m-%d}.zip")
+                urls.append(f"{ARCHIVE}/daily/klines/{symbol}/{interval}/{symbol}-{interval}-{day:%Y-%m-%d}.zip")
                 day += timedelta(days=1)
     daily = list(pool.map(_get, urls))
     rows = [r for blob in monthly + daily for r in _rows(blob)]
@@ -101,32 +101,35 @@ def download(interval: str, start: date, pool: ThreadPoolExecutor) -> list[list]
 
 def build(out: Path, version: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    index = {"version": version, "symbol": SYMBOL, "market": "futures", "seeds": {}}
+    # seeds[<mã>][<khung>]: app.js chọn seed theo ?symbol= và ?interval=.
+    index = {"version": version, "market": "futures", "seeds": {}}
     today = datetime.now(timezone.utc).date()
     with ThreadPoolExecutor(max_workers=12) as pool:
-        for interval, spec in SEEDS.items():
-            began = time.perf_counter()
-            start = spec.get("start") or today - timedelta(days=spec["days"])
-            start = max(start, ARCHIVE_START)
-            try:
-                rows = download(interval, start, pool)
-                if not rows:
-                    raise RuntimeError("không có nến")
-                chart = IncrementalChart()
-                for i, r in enumerate(rows):
-                    chart.add(Bar(index=i, open=r[1], high=r[2], low=r[3], close=r[4],
-                                  timestamp=datetime.fromtimestamp(r[0] / 1000, tz=timezone.utc)))
-                payload = chart.payload()
-                payload["src"] = "Binance Futures (live)"
-                key = f"{SYMBOL}-futures-{interval}"
-                (out / f"{key}.json").write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-                (out / f"{key}.pkl").write_bytes(pickle.dumps(chart, protocol=5))
-                index["seeds"][interval] = {"start": start.isoformat(), "last": rows[-1][0], "bars": len(rows),
-                                            "json": f"seed/{key}.json", "pkl": f"seed/{key}.pkl"}
-                print(f"seed {interval}: {len(rows)} nến từ {start} · {len(payload['trades'])} lệnh · "
-                      f"{time.perf_counter() - began:.1f}s", flush=True)
-            except Exception as exc:  # thiếu seed không làm hỏng trang
-                print(f"seed {interval}: BỎ QUA ({exc})", flush=True)
+        for symbol, first_day in SYMBOLS.items():
+            seeds = index["seeds"][symbol] = {}
+            for interval, spec in SEEDS.items():
+                began = time.perf_counter()
+                start = spec.get("start") or today - timedelta(days=spec["days"])
+                start = max(start, first_day)
+                try:
+                    rows = download(symbol, interval, start, pool)
+                    if not rows:
+                        raise RuntimeError("không có nến")
+                    chart = IncrementalChart()
+                    for i, r in enumerate(rows):
+                        chart.add(Bar(index=i, open=r[1], high=r[2], low=r[3], close=r[4],
+                                      timestamp=datetime.fromtimestamp(r[0] / 1000, tz=timezone.utc)))
+                    payload = chart.payload()
+                    payload["src"] = "Binance Futures (live)"
+                    key = f"{symbol}-futures-{interval}"
+                    (out / f"{key}.json").write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+                    (out / f"{key}.pkl").write_bytes(pickle.dumps(chart, protocol=5))
+                    seeds[interval] = {"start": start.isoformat(), "last": rows[-1][0], "bars": len(rows),
+                                       "json": f"seed/{key}.json", "pkl": f"seed/{key}.pkl"}
+                    print(f"seed {symbol} {interval}: {len(rows)} nến từ {start} · {len(payload['trades'])} lệnh · "
+                          f"{time.perf_counter() - began:.1f}s", flush=True)
+                except Exception as exc:  # thiếu seed không làm hỏng trang
+                    print(f"seed {symbol} {interval}: BỎ QUA ({exc})", flush=True)
     (out / "index.json").write_text(json.dumps(index, indent=1), encoding="utf-8")
 
 
