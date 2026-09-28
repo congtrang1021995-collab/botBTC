@@ -29,6 +29,7 @@ LIVE_CSS = """<style>
 .live b{font-size:17px;font-weight:500}.live .up{color:var(--up)}.live .dn{color:var(--down)}
 .live small{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .boot{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:var(--panel);text-align:center;padding:16px}
+.boot[hidden]{display:none}
 .boot b{display:block;font-size:16px;font-weight:600;margin-bottom:6px}
 .boot span{color:var(--muted);font-size:13px}
 @keyframes lp{50%{opacity:.35}}
