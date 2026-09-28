@@ -31,8 +31,9 @@ from incremental import IncrementalChart
 CHARTS = {}
 
 def load(key, blob):
-    # blob: Uint8Array từ JS (JsProxy) hoặc None
-    CHARTS[key] = pickle.loads(blob.to_bytes()) if blob is not None else IncrementalChart()
+    # blob: Uint8Array từ JS (JsProxy), hoặc null/undefined. Pyodide mới đổi JS null thành
+    # JsNull (khác None), nên kiểm tra theo to_bytes thay vì "is not None".
+    CHARTS[key] = pickle.loads(blob.to_bytes()) if hasattr(blob, "to_bytes") else IncrementalChart()
     return len(CHARTS[key])
 
 def add(key, rows_json, source):

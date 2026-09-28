@@ -69,6 +69,11 @@ aside{background:var(--panel);border:1px solid var(--line);border-radius:8px;dis
 @media (max-width:1080px){aside{height:520px}}
 .filters{display:flex;flex-wrap:wrap;gap:6px;padding:10px;border-bottom:1px solid var(--line)}
 .filters select{flex:1 1 100px}
+.range{display:flex;align-items:center;gap:6px;flex:1 1 100%;font-size:12px;color:var(--muted)}
+.range input{flex:1 1 0;min-width:0}
+.range button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--muted);padding:2px 8px;cursor:pointer;font-size:12px}
+.range button:hover{color:var(--ink)}
+.sub .stat{color:var(--ink)}
 .count{font-size:12px;color:var(--muted);padding:6px 12px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;font-variant-numeric:tabular-nums}
 .list{overflow:auto;flex:1;min-height:0}
 .row{display:grid;grid-template-columns:38px 1fr auto;gap:2px 8px;padding:7px 12px;border-bottom:1px solid var(--grid);cursor:pointer;font-variant-numeric:tabular-nums}
@@ -77,9 +82,9 @@ aside{background:var(--panel);border:1px solid var(--line);border-radius:8px;dis
 .row .id{font-family:var(--mono);font-size:12px;color:var(--faint);grid-row:span 2;align-self:center}
 .row .top{display:flex;gap:8px;align-items:baseline;min-width:0}
 .row .setup{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row .when{font-size:12px;color:var(--muted);font-family:var(--mono)}
+.row .when{font-size:12px;color:var(--muted);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .row .r{font-family:var(--mono);font-size:13px;font-weight:500;text-align:right}
-.row .rs{font-size:11px;color:var(--muted);text-align:right}
+.row .rs{font-size:11px;color:var(--muted);text-align:right;font-family:var(--mono);white-space:nowrap}
 .r.win{color:var(--up)}.r.loss{color:var(--down)}.r.be,.r.open{color:var(--flat)}
 .err{color:var(--down);padding:16px}
 @media (max-width:560px){h1{font-size:19px}.kpis{gap:6px 16px}.kpi b{font-size:15px}}
@@ -148,6 +153,11 @@ aside{background:var(--panel);border:1px solid var(--line);border-radius:8px;dis
         <select id="f-reason" aria-label="Lọc theo lý do thoát">
           <option value="">Mọi lý do thoát</option>
         </select>
+        <div class="range">
+          <label for="f-from">Từ</label><input type="date" id="f-from" aria-label="Thống kê từ ngày vào lệnh">
+          <label for="f-to">đến</label><input type="date" id="f-to" aria-label="Thống kê đến ngày vào lệnh">
+          <button type="button" id="f-clear" title="Bỏ lọc ngày">Xóa</button>
+        </div>
       </div>
       <div class="count"><span id="count"></span><span id="count-r"></span></div>
       <div class="list" id="list" role="listbox" aria-label="Lệnh"></div>
@@ -180,6 +190,8 @@ const fmtFull = s => {const d=dt(s);return `${pad(d.getUTCDate())}/${pad(d.getUT
 const fmtShort = s => {const d=dt(s);return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}/${String(d.getUTCFullYear()).slice(2)}`+(IVS>=86400?'':IVS>=3600?` ${pad(d.getUTCHours())}h`:` ${hm(d)}`);};
 const px = v => v==null ? '—' : v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fr = v => v==null ? '—' : (v>0?'+':'')+v.toFixed(2)+'R';
+// P&L theo giá thật (khối lượng của từng lệnh, chưa trừ phí/trượt giá).
+const fpl = v => v==null ? '—' : (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const tzLabel = () => tz ? 'UTC+7' : 'UTC';
 
 function colors(){
@@ -189,13 +201,28 @@ function colors(){
 }
 let C = colors();
 
+// Thống kê của một nhóm lệnh đã đóng, cùng cách tính với metrics.py (Max DD theo thứ tự đóng lệnh).
+function stats(list){
+  const cl=list.filter(x=>!x.open).sort((a,b)=>a.xi-b.xi||a.ei-b.ei);
+  let eq=0,pk=0,dd=0,gp=0,gl=0,w=0;
+  for(const x of cl){eq+=x.r;pk=Math.max(pk,eq);dd=Math.max(dd,pk-eq);
+    if(x.pnl>0){gp+=x.pnl;w++;}else gl-=x.pnl;}
+  return {total_trades:cl.length,win_rate:cl.length?w/cl.length:0,cumulative_r:eq,net_profit:gp-gl,profit_factor:gl?gp/gl:null,max_drawdown_r:dd};
+}
+const isoDay = s => {const d=dt(s);return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`;};
+const dmy = v => v.slice(8,10)+'/'+v.slice(5,7)+'/'+v.slice(0,4);
+let filterActive=false;
 function renderHead(){
-document.getElementById('period').textContent =
-  `${fmtFull(t[0]).slice(0,10)} → ${fmtFull(t[N-1]).slice(0,10)} · ${N.toLocaleString('vi-VN')} nến · ${D.src||'giá BID'} · không tính phí/trượt giá`;
-const kp = [['Lệnh',m.total_trades],['Win rate',(m.win_rate*100).toFixed(1).replace('.',',')+'%'],['Tổng R',fr(m.cumulative_r)],['Profit factor',m.profit_factor.toFixed(2).replace('.',',')],['Max DD',m.max_drawdown_r.toFixed(2).replace('.',',')+'R']];
+const from=document.getElementById('f-from').value, to=document.getElementById('f-to').value;
+// Có bộ lọc thì KPI tính trên đúng các lệnh đang lọc; không lọc thì dùng số của Python.
+const s = filterActive ? stats(filtered) : m;
+const range = from||to ? `${from?dmy(from):fmtFull(t[0]).slice(0,10)} → ${to?dmy(to):fmtFull(t[N-1]).slice(0,10)}` : '';
+document.getElementById('period').innerHTML =
+  `${fmtFull(t[0]).slice(0,10)} → ${fmtFull(t[N-1]).slice(0,10)} · ${N.toLocaleString('vi-VN')} nến · ${D.src||'giá BID'} · không tính phí/trượt giá`
+  + (filterActive ? `<br><span class="stat">Thống kê theo bộ lọc${range?' · vào lệnh '+range:''}</span>` : '');
+const kp = [['Lệnh',s.total_trades],['Win rate',(s.win_rate*100).toFixed(1).replace('.',',')+'%'],['Tổng R',fr(s.cumulative_r)],['P&L',fpl(s.net_profit)],['Profit factor',s.profit_factor==null?'—':s.profit_factor.toFixed(2).replace('.',',')],['Max DD',s.max_drawdown_r.toFixed(2).replace('.',',')+'R']];
 document.getElementById('kpis').innerHTML = kp.map(([k,v])=>`<div class="kpi"><b>${v}</b><span>${k}</span></div>`).join('');
 }
-renderHead();
 
 const el = document.getElementById('chart');
 const chart = LC.createChart(el,{
@@ -318,19 +345,25 @@ function renderList(){
       <span class="id">#${tr.id}</span>
       <span class="top"><span class="side ${tr.side}">${tr.side==='LONG'?'▲ L':'▼ S'}</span><span class="setup">${SETUP[tr.setup]||tr.setup}</span></span>
       <span class="r ${rr}">${tr.open?'mở':fr(tr.r)}</span>
-      <span class="when">${fmtShort(t[tr.ei])}</span>
-      <span class="rs">${REASON[tr.reason]||tr.reason}</span></div>`;}).join('');
-  const closed = filtered.filter(x=>!x.open), sum = closed.reduce((a,x)=>a+x.r,0), w=closed.filter(x=>res(x)==='win').length;
+      <span class="when">${fmtShort(t[tr.ei])} · ${REASON[tr.reason]||tr.reason}</span>
+      <span class="rs">${tr.open?'':fpl(tr.pnl)}</span></div>`;}).join('');
+  const closed = filtered.filter(x=>!x.open), sum = closed.reduce((a,x)=>a+x.r,0), pl = closed.reduce((a,x)=>a+x.pnl,0), w=closed.filter(x=>res(x)==='win').length;
   document.getElementById('count').textContent = `${filtered.length} lệnh · thắng ${closed.length?Math.round(w/closed.length*100):0}%`;
-  const cr=document.getElementById('count-r');cr.textContent='Tổng '+fr(sum);cr.style.color=sum>=0?'var(--up)':'var(--down)';
+  const cr=document.getElementById('count-r');cr.innerHTML=`Tổng <span style="color:${sum>=0?'var(--up)':'var(--down)'}">${fr(sum)}</span> · P&amp;L <span style="color:${pl>=0?'var(--up)':'var(--down)'}">${fpl(pl)}</span>`;
 }
 function applyFilters(){
   const fs=document.getElementById('f-setup').value, fres=document.getElementById('f-res').value, frs=reasonSel.value;
-  filtered = trades.filter(x=>(!fs||x.setup===fs)&&(!fres||res(x)===fres)&&(!frs||x.reason===frs));
+  let from=document.getElementById('f-from').value, to=document.getElementById('f-to').value;
+  if(from&&to&&from>to){[from,to]=[to,from];document.getElementById('f-from').value=from;document.getElementById('f-to').value=to;}
+  // Lọc ngày theo ngày của nến vào lệnh, theo múi giờ đang chọn.
+  filtered = trades.filter(x=>{const d=(from||to)?isoDay(t[x.ei]):'';
+    return (!fs||x.setup===fs)&&(!fres||res(x)===fres)&&(!frs||x.reason===frs)&&(!from||d>=from)&&(!to||d<=to);});
+  filterActive=!!(fs||fres||frs||from||to);
   if(selected && !filtered.includes(selected)) selected=null;
-  buildLevels(filtered);buildMarkers(filtered);renderList();renderDetail();setPriceLines(selected);
+  buildLevels(filtered);buildMarkers(filtered);renderList();renderDetail();setPriceLines(selected);renderHead();
 }
-['f-setup','f-res','f-reason'].forEach(id=>document.getElementById(id).addEventListener('change',applyFilters));
+['f-setup','f-res','f-reason','f-from','f-to'].forEach(id=>document.getElementById(id).addEventListener('change',applyFilters));
+document.getElementById('f-clear').addEventListener('click',()=>{document.getElementById('f-from').value='';document.getElementById('f-to').value='';applyFilters();});
 
 function renderDetail(){
   const box=document.getElementById('detail'), tr=selected;
@@ -399,8 +432,8 @@ document.getElementById('goto').addEventListener('change',e=>{
   const ts=chart.timeScale(),r=ts.getVisibleLogicalRange(),span=r?Math.max(48,r.to-r.from):240;
   ts.setVisibleLogicalRange({from:lo-span*0.3,to:lo+span*0.7});renderLegend(lo);
 });
-const gotoEl=document.getElementById('goto');gotoEl.min=fmtFull(t[0]).slice(6,10)+'-'+fmtFull(t[0]).slice(3,5)+'-'+fmtFull(t[0]).slice(0,2);
-gotoEl.max=fmtFull(t[N-1]).slice(6,10)+'-'+fmtFull(t[N-1]).slice(3,5)+'-'+fmtFull(t[N-1]).slice(0,2);
+function setDateBounds(){for(const id of ['goto','f-from','f-to']){const x=document.getElementById(id);x.min=isoDay(t[0]);x.max=isoDay(t[N-1]);}}
+setDateBounds();
 
 document.querySelectorAll('[data-layer]').forEach(b=>b.addEventListener('click',()=>{
   const k=b.dataset.layer;layers[k]=!layers[k];b.setAttribute('aria-pressed',layers[k]);applyLayers();renderLegend(null);}));
@@ -408,7 +441,7 @@ document.querySelectorAll('[data-tz]').forEach(b=>b.addEventListener('click',()=
   tz=+b.dataset.tz;try{localStorage.setItem('trade-chart-tz',String(tz));}catch(e){}
   document.querySelectorAll('[data-tz]').forEach(x=>x.setAttribute('aria-pressed',x===b));
   chart.applyOptions({timeScale:{tickMarkFormatter:tickFmt},localization:{timeFormatter:s=>fmtFull(s),priceFormatter:p=>px(p)}});
-  renderList();renderDetail();renderLegend(null);
+  setDateBounds();applyFilters();renderLegend(null);
   if(selected){const row=listEl.querySelector(`.row[data-id="${selected.id}"]`);row&&row.scrollIntoView({block:'nearest'});}
 }));
 document.querySelectorAll('[data-tz]').forEach(x=>x.setAttribute('aria-pressed',+x.dataset.tz===tz));
@@ -421,7 +454,7 @@ function retheme(){C=colors();
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',retheme);
 new MutationObserver(retheme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 
-buildLevels(filtered);applyLayers();renderList();renderLegend(null);
+buildLevels(filtered);applyLayers();renderList();renderHead();renderLegend(null);
 const closedList=trades.filter(x=>!x.open);
 select(closedList[closedList.length-1]);
 
@@ -444,7 +477,7 @@ window.TradeChart = {
     // Đang xem mép phải thì trượt theo nến mới; đang xem quá khứ thì đứng yên.
     if(reset){ selected=null; hoverI=null; }
     else if(range){const shift=range.to>=oldN-1?N-oldN:0;ts.setVisibleLogicalRange({from:range.from+shift,to:range.to+shift});}
-    fillReasons(); renderHead();
+    fillReasons(); setDateBounds();
     selected=keep?trades.find(x=>x.ei===keep.ei&&x.side===keep.side)||null:null;
     applyFilters(); renderLegend(hoverI);
     if(reset){const cl=trades.filter(x=>!x.open), last=trades.find(x=>x.open)||cl[cl.length-1];
