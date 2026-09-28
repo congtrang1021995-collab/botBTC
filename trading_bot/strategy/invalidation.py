@@ -156,6 +156,27 @@ def evaluate_invalidation(
     )
 
 
+def apply_minimum_risk(
+    side: PositionSide,
+    entry_price: float,
+    hard_stop_price: float,
+    min_risk: float,
+) -> float:
+    """Bot 2: nới hard stop để 1R (giá khớp -> stop) không nhỏ hơn min_risk.
+
+    Chỉ nới khi stop nằm đúng phía giá khớp; stop đã bị giá khớp vượt qua (gap)
+    giữ nguyên để lệnh bị hủy như trước.
+    """
+    if min_risk <= 0.0:
+        return hard_stop_price
+    if side == PositionSide.LONG:
+        if hard_stop_price < entry_price and entry_price - hard_stop_price < min_risk:
+            return entry_price - min_risk
+    elif hard_stop_price > entry_price and hard_stop_price - entry_price < min_risk:
+        return entry_price + min_risk
+    return hard_stop_price
+
+
 TRAIL_MAX_TRIGGER_R = 9
 
 

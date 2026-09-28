@@ -35,6 +35,10 @@ class StrategyConfig:
     max_trades_per_setup_family: int = 1
     atr_length: int = 13
     stop_atr_multiplier: float = 0.30
+    # Bot 2 (2026-09-28): 1R tối thiểu, đơn vị GIÁ. Khi khớp lệnh mà khoảng cách
+    # giá khớp -> hard stop nhỏ hơn mốc thì nới stop ra đủ mốc (TP/trailing tính
+    # theo 1R mới). 0 = tắt. Đo trên XAU (1R trung vị ~45 giá); BTC hầu như không chạm.
+    min_initial_risk: float = 10.0
     minimum_tick: float = 0.01
     fixed_position_size: float = 1.0
     # Bot 2 (2026-09-28): TP nâng từ 5R lên 10R.
@@ -71,6 +75,8 @@ class StrategyConfig:
             raise ValueError("max_trades_per_setup_family must be >= 0")
         if self.stop_atr_multiplier < 0.0:
             raise ValueError("stop_atr_multiplier must be >= 0")
+        if self.min_initial_risk < 0.0:
+            raise ValueError("min_initial_risk must be >= 0")
         if self.minimum_tick <= 0.0:
             raise ValueError("minimum_tick must be > 0")
         if self.fixed_position_size <= 0.0:

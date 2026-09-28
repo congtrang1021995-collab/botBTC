@@ -32,6 +32,10 @@
 > Cập nhật 2026-09-28 — **Step 3**: Value Zone đã xác nhận nhưng bị chặn vì slot Value Zone
 > đầy thì **xóa trạng thái chờ và EMA tham chiếu**; không chờ slot trống rồi vào muộn. Muốn
 > vào lại phải có Value Zone Setup mới (mục 21, 28).
+>
+> Cập nhật 2026-09-28 — **Step 4**: **1R tối thiểu 10 giá** (`min_initial_risk = 10`). Khi
+> khớp lệnh mà giá khớp cách hard stop nhỏ hơn mốc thì nới stop ra đúng mốc; TP 10R và
+> trailing tính theo 1R mới. Khối lượng vẫn cố định, không đổi theo 1R (mục 25).
 
 ## Step 1–3 — Trend, Setup & Entry v1.7 (Bot 2)
 
@@ -676,6 +680,20 @@ Stop Buffer = max(3 * Minimum Tick, ATR(13) * Stop ATR Multiplier)
 
 Hard stop ban đầu được đặt dưới swing bảo vệ đối với Long và trên swing bảo vệ
 đối với Short. Sau khi vào lệnh, stop đang hoạt động được phép dời theo mục 25.1.
+
+**Bot 2 (2026-09-28) — 1R tối thiểu.** Khi lệnh khớp tại Open nến kế tiếp:
+
+```text
+Long:  nếu Hard Stop < Entry và Entry - Hard Stop < Min Initial Risk -> Hard Stop = Entry - Min Initial Risk
+Short: nếu Hard Stop > Entry và Hard Stop - Entry < Min Initial Risk -> Hard Stop = Entry + Min Initial Risk
+```
+
+`Min Initial Risk` (`min_initial_risk`, Pine `1R tối thiểu`) mặc định **10**, đơn vị giá;
+`0` = tắt. Stop sau khi nới là hard stop ban đầu dùng định nghĩa 1R cho TP (mục 29) và
+trailing (mục 25.1). Nếu giá khớp đã vượt qua stop (gap) thì giữ nguyên để lệnh bị hủy như
+cũ (`INVALID_ENTRY_RISK`). Khối lượng vẫn theo Step 5, không đổi theo độ lớn 1R.
+Lý do: trên XAU các stop quá sát (1R vài giá) bị quét sớm và lãi bằng tiền không đáng kể;
+backtest XAUUSDT Futures (12/2025→09/2026) mốc 10 tốt hơn 5/15/20 ở cả H1 và 15p.
 
 ### 25.1. Trailing stop theo R
 

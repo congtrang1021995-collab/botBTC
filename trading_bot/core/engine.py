@@ -21,7 +21,11 @@ from trading_bot.strategy.exit import (
     calculate_take_profit_price,
     evaluate_exit,
 )
-from trading_bot.strategy.invalidation import InvalidationDecision, evaluate_invalidation
+from trading_bot.strategy.invalidation import (
+    InvalidationDecision,
+    apply_minimum_risk,
+    evaluate_invalidation,
+)
 from trading_bot.strategy.position_size import (
     PositionSizeDecision,
     calculate_position_size,
@@ -222,6 +226,17 @@ class TradingEngine:
         opened_position: PositionState | None = None
         if entry.should_enter and entry.executed_entry is not None:
             executed = entry.executed_entry
+            if executed.hard_stop_price is not None and entry.entry_price is not None:
+                # Bot 2: 1R tối thiểu tính từ giá khớp thực tế.
+                executed = replace(
+                    executed,
+                    hard_stop_price=apply_minimum_risk(
+                        executed.side,
+                        entry.entry_price,
+                        executed.hard_stop_price,
+                        self.config.min_initial_risk,
+                    ),
+                )
             position_size = calculate_position_size(
                 context,
                 replace(strategy_after_entry, pending_entry=executed),

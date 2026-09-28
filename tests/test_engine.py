@@ -57,6 +57,7 @@ class EngineTests(unittest.TestCase):
             StrategyConfig(
                 require_trend_maintenance_filter=False,
                 exit_on_trend_loss=False,
+                min_initial_risk=0.0,
             )
         )
         engine._state = EngineState(
@@ -81,6 +82,38 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result.state.position.entry_price, 103.0)
         self.assertAlmostEqual(result.state.position.take_profit_price, 193.0)
         self.assertEqual(result.state.position.initial_hard_stop_price, 94.0)
+
+    def test_entry_widens_stop_to_minimum_initial_risk(self) -> None:
+        # Bot 2: 1R = 103 - 94 = 9 < mốc 10 -> stop nới xuống 93, TP 10R = 203.
+        engine = TradingEngine(
+            StrategyConfig(
+                require_trend_maintenance_filter=False,
+                exit_on_trend_loss=False,
+            )
+        )
+        engine._state = EngineState(
+            strategy=StrategyState(
+                trend=TrendState.UPTREND,
+                pending_entry=PendingEntry(
+                    side=PositionSide.LONG,
+                    source_setup=SetupType.BREAKOUT_LONG,
+                    signal_bar_index=0,
+                    trade_invalidation_price=95.0,
+                    hard_stop_price=94.0,
+                    stop_buffer=1.0,
+                ),
+            )
+        )
+
+        result = engine.process_bar(
+            make_bar(1, 103.0, open_=103.0, high=104.0, low=100.0)
+        )
+
+        position = result.state.position
+        self.assertEqual(position.status, PositionStatus.OPEN)
+        self.assertAlmostEqual(position.initial_hard_stop_price, 93.0)
+        self.assertAlmostEqual(position.hard_stop_price, 93.0)
+        self.assertAlmostEqual(position.take_profit_price, 203.0)
 
     def test_engine_persists_trailing_stop_for_the_next_bar(self) -> None:
         engine = TradingEngine(

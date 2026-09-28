@@ -12,7 +12,7 @@ from trading_bot.core.models import (
     StrategyState,
     TrendState,
 )
-from trading_bot.strategy.invalidation import evaluate_invalidation
+from trading_bot.strategy.invalidation import apply_minimum_risk, evaluate_invalidation
 from tests.helpers import make_context
 
 
@@ -27,6 +27,24 @@ class InvalidationTests(unittest.TestCase):
         config = StrategyConfig()
         self.assertEqual(config.atr_length, 13)
         self.assertEqual(config.stop_atr_multiplier, 0.30)
+
+    def test_default_minimum_initial_risk_is_ten_price_units(self) -> None:
+        self.assertEqual(StrategyConfig().min_initial_risk, 10.0)
+        with self.assertRaises(ValueError):
+            StrategyConfig(min_initial_risk=-1.0)
+
+    def test_minimum_risk_widens_only_tight_stops(self) -> None:
+        long_, short = PositionSide.LONG, PositionSide.SHORT
+        self.assertAlmostEqual(apply_minimum_risk(long_, 100.0, 97.0, 10.0), 90.0)
+        self.assertAlmostEqual(apply_minimum_risk(short, 100.0, 103.0, 10.0), 110.0)
+        # 1R đã đủ mốc: giữ nguyên.
+        self.assertAlmostEqual(apply_minimum_risk(long_, 100.0, 85.0, 10.0), 85.0)
+        self.assertAlmostEqual(apply_minimum_risk(short, 100.0, 110.0, 10.0), 110.0)
+        # Giá khớp đã vượt qua stop (gap): giữ nguyên để lệnh bị hủy như cũ.
+        self.assertAlmostEqual(apply_minimum_risk(long_, 100.0, 101.0, 10.0), 101.0)
+        self.assertAlmostEqual(apply_minimum_risk(short, 100.0, 99.0, 10.0), 99.0)
+        # Mốc 0 = tắt.
+        self.assertAlmostEqual(apply_minimum_risk(long_, 100.0, 97.0, 0.0), 97.0)
 
     def test_long_stop_uses_frozen_protected_low_and_atr_buffer(self) -> None:
         pending = PendingEntry(

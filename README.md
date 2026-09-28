@@ -86,6 +86,9 @@ Binance (bị chặn ở Mỹ). Xem thử trên máy: `python web/build_site.py`
   đầy thì xóa trạng thái chờ, không vào muộn khi slot trống; cần setup Value Zone mới.
   Trước đây mốc EMA được giữ và có thể bắn lệnh nhiều giờ sau (vd. BTC 15p 27/08/2026,
   1R gấp ~4 lần bình thường).
+- 2026-09-28 — Step 4: **1R tối thiểu 10 giá** (`min_initial_risk=10`, Pine `1R tối thiểu`).
+  Giá khớp cách hard stop dưới 10 thì nới stop ra đúng 10; TP 10R và trailing theo 1R mới.
+  Khối lượng vẫn cố định (không đổi theo 1R). Đặt `0` để tắt.
 
 ---
 
@@ -117,6 +120,7 @@ trực quan trên TradingView.
 - Step 4 — Invalidation: đã triển khai hard stop. **Bot 2 đóng lệnh tại Close khi trend
   đảo chiều** (`exit_on_trend_reversal=True`); trend về SIDEWAY không đóng lệnh
   (`exit_on_trend_loss=False` mặc định, bật để đóng như bot gốc).
+  **Bot 2:** 1R tối thiểu 10 giá — stop sát hơn được nới ra khi khớp lệnh (`min_initial_risk`).
   Rule thoát riêng khi Close phá Protected Swing đã đóng băng hiện tạm thời bị vô
   hiệu hóa. Stop được dời theo lợi nhuận: vượt 1R về Entry, vượt 2R lên +1R,
   vượt 3R lên +2R, ... vượt 9R lên +8R (Bot 2, 2026-09-28: vượt nR -> +(n-1)R,
