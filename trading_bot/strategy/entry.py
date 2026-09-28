@@ -133,6 +133,9 @@ def evaluate_entry(
         and close < reference_value
         and _same_direction_or_flat(state, PositionSide.SHORT)
     )
+    # Bot 2 Step 3 (2026-09-28): tín hiệu Value Zone bị chặn vì slot đầy thì xóa
+    # mốc EMA đang nhớ, tránh bắn lại muộn khi giá đã rời xa vùng giá trị. Muốn vào
+    # lại phải có setup Value Zone mới.
     if value_zone_long_confirmed:
         if _family_slot_available(state, SetupType.VALUE_ZONE_LONG, config):
             return _scheduled_entry(
@@ -142,6 +145,8 @@ def evaluate_entry(
                 "VALUE_ZONE_LONG_CONFIRMED",
             )
         blocked_reason = "VALUE_ZONE_SLOT_FULL"
+        waiting_side = None
+        waiting_ema = None
     if value_zone_short_confirmed:
         if _family_slot_available(state, SetupType.VALUE_ZONE_SHORT, config):
             return _scheduled_entry(
@@ -151,6 +156,8 @@ def evaluate_entry(
                 "VALUE_ZONE_SHORT_CONFIRMED",
             )
         blocked_reason = "VALUE_ZONE_SLOT_FULL"
+        waiting_side = None
+        waiting_ema = None
 
     if (
         SetupType.VALUE_ZONE_LONG in started_setups

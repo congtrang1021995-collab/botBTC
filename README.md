@@ -82,6 +82,10 @@ Binance (bị chặn ở Mỹ). Xem thử trên máy: `python web/build_site.py`
 - 2026-09-24 — Step 3/6: tối đa 2 lệnh nắm giữ, mỗi loại setup (Breakout / Value
   Zone) 1 lệnh. `max_trades_per_setup_family=1` (Pine: `Số lệnh mở tối đa mỗi loại
   setup`); đặt `0` để bỏ giới hạn. Slot xét sau khi lệnh bị stop/TP trong nến đã đóng.
+- 2026-09-28 — Step 3: Value Zone đã xác nhận (Close lấy lại EMA) nhưng slot Value Zone
+  đầy thì xóa trạng thái chờ, không vào muộn khi slot trống; cần setup Value Zone mới.
+  Trước đây mốc EMA được giữ và có thể bắn lệnh nhiều giờ sau (vd. BTC 15p 27/08/2026,
+  1R gấp ~4 lần bình thường).
 
 ---
 
@@ -109,7 +113,7 @@ trực quan trên TradingView.
   khi setup chuyển `FALSE -> TRUE`. Cả hai vào lệnh tại Open nến kế tiếp. Mỗi tín
   hiệu hợp lệ mở một giao dịch độc lập. **Bot 2:** mỗi loại setup chỉ giữ 1 lệnh
   đang mở, nên tối đa 2 lệnh (1 Breakout + 1 Value Zone); tín hiệu của loại đã có
-  lệnh mở bị bỏ qua. Không còn dùng stop-entry tại đỉnh/đáy nến xác nhận ± 1 tick.
+  lệnh mở bị bỏ qua (Value Zone bị bỏ qua thì xóa luôn trạng thái chờ). Không còn dùng stop-entry tại đỉnh/đáy nến xác nhận ± 1 tick.
 - Step 4 — Invalidation: đã triển khai hard stop. **Bot 2 đóng lệnh tại Close khi trend
   đảo chiều** (`exit_on_trend_reversal=True`); trend về SIDEWAY không đóng lệnh
   (`exit_on_trend_loss=False` mặc định, bật để đóng như bot gốc).

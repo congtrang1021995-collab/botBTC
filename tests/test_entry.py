@@ -282,7 +282,7 @@ class SetupSlotTests(unittest.TestCase):
         self.assertTrue(result.scheduled)
         self.assertEqual(result.source_setup, SetupType.BREAKOUT_LONG)
 
-    def test_value_zone_confirmation_waits_while_a_value_zone_trade_is_open(self) -> None:
+    def test_value_zone_confirmation_blocked_by_full_slot_clears_waiting_state(self) -> None:
         result = evaluate_entry(
             make_context(close=101.0, ema_fast=100.0, ema_slow=96.0),
             self._state(
@@ -294,7 +294,44 @@ class SetupSlotTests(unittest.TestCase):
         )
         self.assertFalse(result.scheduled)
         self.assertEqual(result.reason, "VALUE_ZONE_SLOT_FULL")
-        # Trạng thái chờ được giữ để xác nhận lại khi slot trống.
+        # Bot 2 Step 3 (2026-09-28): tín hiệu bị chặn vì slot đầy thì xóa mốc nhớ.
+        self.assertIsNone(result.value_zone_entry_side)
+        self.assertIsNone(result.value_zone_entry_ema)
+
+    def test_blocked_value_zone_does_not_fire_after_slot_frees(self) -> None:
+        blocked = evaluate_entry(
+            make_context(close=101.0, ema_fast=100.0, ema_slow=96.0),
+            self._state(
+                _open_long(SetupType.VALUE_ZONE_LONG, "LONG-1"),
+                value_zone_entry_side=PositionSide.LONG,
+                value_zone_entry_ema=EmaReference.FAST,
+            ),
+            self.config,
+        )
+        # Nến sau: lệnh Value Zone cũ đã đóng, Close vẫn trên EMA -> không vào muộn.
+        later = evaluate_entry(
+            make_context(index=11, close=108.0, ema_fast=101.0, ema_slow=97.0),
+            self._state(
+                value_zone_entry_side=blocked.value_zone_entry_side,
+                value_zone_entry_ema=blocked.value_zone_entry_ema,
+            ),
+            self.config,
+        )
+        self.assertFalse(later.scheduled)
+        self.assertEqual(later.reason, "NO_ENTRY")
+
+    def test_waiting_state_kept_while_close_has_not_reclaimed_ema_and_slot_full(self) -> None:
+        result = evaluate_entry(
+            make_context(close=99.0, ema_fast=100.0, ema_slow=96.0),
+            self._state(
+                _open_long(SetupType.VALUE_ZONE_LONG, "LONG-1"),
+                value_zone_entry_side=PositionSide.LONG,
+                value_zone_entry_ema=EmaReference.FAST,
+            ),
+            self.config,
+        )
+        # Chưa xác nhận thì chưa bị chặn -> vẫn chờ.
+        self.assertEqual(result.reason, "WAITING_FOR_EMA_CONFIRMATION")
         self.assertEqual(result.value_zone_entry_side, PositionSide.LONG)
         self.assertEqual(result.value_zone_entry_ema, EmaReference.FAST)
 

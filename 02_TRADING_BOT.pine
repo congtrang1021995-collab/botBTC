@@ -11,6 +11,8 @@
 // bật); trend về SIDEWAY không đóng lệnh (input "Thoát lệnh khi mất trend" mặc định tắt).
 // Bot 2 Step 3/6 (2026-09-24): tối đa 2 lệnh nắm giữ — mỗi loại setup (Breakout,
 // Value Zone) 1 lệnh. Slot được xét sau khi đối soát các trade đã đóng trong nến.
+// Bot 2 Step 3 (2026-09-28): Value Zone xác nhận nhưng slot đầy -> xóa trạng thái chờ
+// (không vào muộn khi slot trống); cần setup Value Zone mới.
 strategy(
      title = "Investment System Bot 2 — Steps 1–7 v3.9 (slope 13 nến cùng dấu, k=5, 1 lệnh/setup, exit khi đảo chiều trend)",
      shorttitle = "ISBot2",
@@ -495,6 +497,14 @@ if processClosedBar
             else if valueZoneShortConfirmed and valueZoneSlotFree
                 scheduledSide := ENTRY_SHORT
                 scheduledSource := SOURCE_VALUE_ZONE
+
+        // Bot 2 Step 3 (2026-09-28): Value Zone đã xác nhận nhưng slot đầy -> xóa mốc EMA
+        // đang nhớ, không chờ slot trống rồi vào muộn. Muốn vào lại cần setup Value Zone mới.
+        bool valueZoneLongSlotBlocked = valueZoneLongConfirmed and not valueZoneSlotFree and strategy.position_size >= 0
+        bool valueZoneShortSlotBlocked = valueZoneShortConfirmed and not valueZoneSlotFree and strategy.position_size <= 0
+        if valueZoneLongSlotBlocked or valueZoneShortSlotBlocked
+            waitingValueZoneSide := ENTRY_NONE
+            valueZoneEntryEma := EMA_NONE
 
         // Chỉ mở chồng khi cùng chiều với vị thế hiện tại; không tự đảo chiều.
         bool sameDirection = strategy.position_size == 0 or (scheduledSide == ENTRY_LONG and strategy.position_size > 0) or (scheduledSide == ENTRY_SHORT and strategy.position_size < 0)

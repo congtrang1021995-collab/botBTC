@@ -28,6 +28,10 @@
 > Cập nhật 2026-09-28 — **Step 4/7**: TP nâng từ 5R lên **10R**
 > (`take_profit_r_multiple = 10`); trailing nối dài tới 9 bậc: vượt `nR` thì stop lên
 > `(n-1)R`, n = 1..9 (vượt 9R lên +8R) (mục 20.1, 25.1, 29).
+>
+> Cập nhật 2026-09-28 — **Step 3**: Value Zone đã xác nhận nhưng bị chặn vì slot Value Zone
+> đầy thì **xóa trạng thái chờ và EMA tham chiếu**; không chờ slot trống rồi vào muộn. Muốn
+> vào lại phải có Value Zone Setup mới (mục 21, 28).
 
 ## Step 1–3 — Trend, Setup & Entry v1.7 (Bot 2)
 
@@ -609,6 +613,12 @@ Sau khi xác nhận, Long/Short vào tại Open nến kế tiếp theo mục 20.
 chờ Value Zone bị xóa sau khi xác nhận hoặc khi trend đổi hướng, giá đóng cửa
 chạm/phá Important Swing bảo vệ setup, hoặc đang có một Entry khác chờ khớp.
 
+Bot 2 (2026-09-28): trạng thái chờ cũng bị xóa khi `VALUE_ZONE_*_ENTRY_CONFIRMED` đúng
+nhưng slot Value Zone đã đầy (reason `VALUE_ZONE_SLOT_FULL`, mục 27). Nếu không, mốc EMA
+cũ có thể kích hoạt nhiều giờ sau khi lệnh cũ đóng, lúc giá đã rời xa vùng giá trị (stop
+theo swing cũ nên 1R bị phình to). Khi chưa xác nhận (Close chưa lấy lại EMA) thì slot đầy
+không hủy trạng thái chờ.
+
 ### 22. Entry từ Breakout
 
 ```text
@@ -790,7 +800,8 @@ Kiểm thử tối thiểu:
 
 1. Position Long từ Value Zone đang mở vẫn nhận Entry Long từ Breakout (và ngược lại).
 2. Position từ Breakout đang mở chặn tín hiệu Breakout mới (reason `BREAKOUT_SLOT_FULL`);
-   Value Zone đang mở chặn xác nhận Value Zone mới (`VALUE_ZONE_SLOT_FULL`) nhưng giữ trạng thái chờ.
+   Value Zone đang mở chặn xác nhận Value Zone mới (`VALUE_ZONE_SLOT_FULL`) và xóa trạng thái chờ
+   (2026-09-28); slot trống ở nến sau cũng không vào lệnh nếu chưa có setup Value Zone mới.
 3. Hai lệnh (1 Breakout + 1 Value Zone) đang mở chặn mọi tín hiệu mới.
 4. Breakout và Value Zone cùng xác nhận khi slot Breakout đầy → vào Value Zone.
 5. Lệnh cũ bị hard stop trong nến giải phóng slot ngay nến đó (engine); lệnh chờ khớp tại Open cùng loại vẫn vào.
