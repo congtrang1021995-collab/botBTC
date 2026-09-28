@@ -45,9 +45,11 @@ def build(out: Path) -> None:
     if marker not in html:
         raise SystemExit("template.html đã đổi cấu trúc: không tìm thấy khối 'const D = __DATA_JSON__'.")
     html = (html
-            .replace("__TITLE__", "BTCUSDT.P H1 Bot2 Live")
+            .replace("__TITLE__", "BTCUSDT.P Bot2 Live")
             .replace("__SYMBOL__", "BTCUSDT.P")
-            .replace("__TF__", "H1")
+            # Mã và khung do app.js đặt theo tham số URL (?symbol=&interval=).
+            .replace("</span>__TF__ ·", '</span><span id="tf-label">H1</span> ·')
+            .replace("__TF__", "đang chọn")
             # Khối chart chỉ chạy khi app.js đã có dữ liệu từ Bot2.
             .replace(marker, '<script type="text/x-chart" id="chart-main">\nconst D = window.__D;'))
     html = html.replace("<div class=\"wrap\">", LIVE_CSS + "<div class=\"wrap\">", 1)

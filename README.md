@@ -45,7 +45,9 @@ python data/chart_template/live_server.py --market futures --interval 1h
 server. Trình duyệt người xem tự tải nến Binance Futures, chạy chính code Python Bot2 bằng
 Pyodide (`web/worker.js`) và nhận giá realtime qua WebSocket; nến đóng thì Bot2 tính lại. Mỗi
 lần push lên `main`, GitHub Actions chạy test, dựng `_site/` bằng `web/build_site.py` rồi
-đăng lên Pages, nên sửa rule xong push là trang dùng rule mới. Tham số URL tùy chọn:
+đăng lên Pages, nên sửa rule xong push là trang dùng rule mới. Nút **Khung** (5p / 15p /
+1h / 4h / Ngày) chạy Bot2 trên chính khung đó. Lịch sử mặc định: 30 ngày cho 5p, 90 ngày cho
+15p, từ 2025 cho 1h, từ 2022 cho 4h và từ đầu cho Ngày. Tham số URL tùy chọn:
 `?symbol=ETHUSDT&interval=4h&market=spot&start=2025-06-01`. Người xem cần truy cập được
 Binance (bị chặn ở Mỹ). Xem thử trên máy: `python web/build_site.py` rồi
 `python -m http.server 8766 --directory _site`.

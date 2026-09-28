@@ -3,13 +3,25 @@
 // Tham số URL tùy chọn: ?symbol=ETHUSDT&interval=4h&market=spot&start=2025-06-01
 (function(){
 const q = new URLSearchParams(location.search);
+// Các khung xem được. Mỗi khung chạy Bot2 trên chính nến của khung đó; lịch sử mặc định
+// giữ khoảng 8–15 nghìn nến để Pyodide chạy nhanh.
+const TFS = {
+  '5m':  {label:'5p',   ms:3e5,   days:30},
+  '15m': {label:'15p',  ms:9e5,   days:90},
+  '1h':  {label:'1h',   ms:36e5,  start:'2025-01-01'},
+  '4h':  {label:'4h',   ms:144e5, start:'2022-01-01'},
+  '1d':  {label:'Ngày', ms:864e5, start:'2019-01-01'},
+};
+const TF_NAME = {'5m':'M5','15m':'M15','1h':'H1','4h':'H4','1d':'D1'};
+const interval = TFS[q.get('interval')] ? q.get('interval') : '1h';
+const defaultStart = tf => tf.start || new Date(Date.now() - tf.days*864e5).toISOString().slice(0,10);
 const CFG = {
   symbol: (q.get('symbol') || 'BTCUSDT').toUpperCase(),
-  interval: q.get('interval') || '1h',
+  interval,
   market: q.get('market') === 'spot' ? 'spot' : 'futures',
-  start: q.get('start') || '2025-01-01',
+  start: q.get('start') || defaultStart(TFS[interval]),
 };
-const IV = {'15m':9e5,'30m':18e5,'1h':36e5,'2h':72e5,'4h':144e5,'1d':864e5}[CFG.interval];
+const IV = TFS[CFG.interval].ms;
 const REST = CFG.market === 'futures' ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://api.binance.com/api/v3/klines';
 const PAGE = CFG.market === 'futures' ? 1500 : 1000;
 // Futures: kline nằm ở /market/ws (đường /ws cũ kết nối được nhưng không gửi kline).
@@ -23,6 +35,23 @@ const clock = () => new Date().toLocaleTimeString('vi-VN',{hour12:false});
 const rows = [];          // nến đã đóng: [open_ms, o, h, l, c]
 let TC = null, running = false, rerunQueued = false;
 
+// ---- nhãn mã/khung + nút chọn khung ----
+const symLabel = CFG.symbol + (CFG.market === 'futures' ? '.P' : '');
+document.querySelector('h1 .sym').textContent = symLabel;
+const tfEl = $('tf-label'); if (tfEl) tfEl.textContent = TF_NAME[CFG.interval];
+document.title = `${symLabel} ${TF_NAME[CFG.interval]} Bot2 Live`;
+const tfGroup = document.createElement('div');
+tfGroup.className = 'grp'; tfGroup.setAttribute('role', 'group'); tfGroup.setAttribute('aria-label', 'Khung thời gian');
+tfGroup.innerHTML = '<span class="lab">Khung</span>' + Object.entries(TFS).map(([k, tf]) =>
+  `<button class="btn" data-tf="${k}" aria-pressed="${k === CFG.interval}">${tf.label}</button>`).join('');
+document.querySelector('.bar').prepend(tfGroup);
+tfGroup.addEventListener('click', e => {
+  const b = e.target.closest('[data-tf]'); if (!b || b.dataset.tf === CFG.interval) return;
+  const p = new URLSearchParams(location.search);
+  p.set('interval', b.dataset.tf); p.delete('start');   // mỗi khung dùng lịch sử mặc định riêng
+  location.search = p.toString();
+});
+
 // ---- trạng thái trên đầu trang + màn chờ ----
 const box = document.createElement('div');
 box.className = 'kpi live'; box.dataset.s = 'off';
@@ -30,7 +59,7 @@ box.innerHTML = '<span class="dot" aria-hidden="true"></span><div><b id="lv-px">
 document.querySelector('header').appendChild(box);
 const overlay = document.createElement('div');
 overlay.className = 'boot';
-overlay.innerHTML = '<div><b>Đang dựng chart live</b><span id="boot-st">Đang tải nến từ Binance…</span></div>';
+overlay.innerHTML = `<div><b>Đang dựng chart live ${TF_NAME[CFG.interval]}</b><span id="boot-st">Đang tải nến từ Binance…</span></div>`;
 document.querySelector('.chartbox').appendChild(overlay);
 const setStatus = (s, text) => { box.dataset.s = s; $('lv-st').textContent = text; };
 const setBoot = text => { const el = $('boot-st'); if (el) el.textContent = text; };
@@ -131,6 +160,7 @@ async function main(){
     if (!rows.length) throw new Error('Binance không trả về nến nào.');
     const m = await runBot(setBoot);
     window.__D = JSON.parse(m.payload);
+    window.__D.iv = IV / 1000;
     const s = document.createElement('script');
     s.textContent = $('chart-main').textContent;
     document.body.appendChild(s);

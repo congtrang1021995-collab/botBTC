@@ -98,9 +98,9 @@ aside{background:var(--panel);border:1px solid var(--line);border-radius:8px;dis
   <div class="bar" role="toolbar" aria-label="Điều khiển biểu đồ">
     <div class="grp"><span class="lab">Khung nhìn</span>
       <button class="btn" data-span="24">1N</button>
-      <button class="btn" data-span="120">1T</button>
-      <button class="btn" data-span="480">1Th</button>
-      <button class="btn" data-span="1440">3Th</button>
+      <button class="btn" data-span="168">1T</button>
+      <button class="btn" data-span="720">1Th</button>
+      <button class="btn" data-span="2160">3Th</button>
       <button class="btn" data-span="all">Tất cả</button>
     </div>
     <div class="grp"><label class="lab" for="goto">Đến ngày</label><input type="date" id="goto"></div>
@@ -173,8 +173,11 @@ try{const s=localStorage.getItem('trade-chart-tz'); if(s==='0'||s==='7') tz=+s;}
 
 const pad = n => String(n).padStart(2,'0');
 const dt = s => new Date((s + tz*3600)*1000);
-const fmtFull = s => {const d=dt(s);return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}/${d.getUTCFullYear()} ${pad(d.getUTCHours())}:00`;};
-const fmtShort = s => {const d=dt(s);return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}/${String(d.getUTCFullYear()).slice(2)} ${pad(d.getUTCHours())}h`;};
+// Độ dài 1 nến (giây): payload có "iv" thì dùng, không thì suy từ hai nến đầu (mặc định H1).
+const IVS = D.iv || (t.length>1 ? t[1]-t[0] : 3600);
+const hm = d => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+const fmtFull = s => {const d=dt(s);return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}/${d.getUTCFullYear()}`+(IVS>=86400?'':` ${hm(d)}`);};
+const fmtShort = s => {const d=dt(s);return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}/${String(d.getUTCFullYear()).slice(2)}`+(IVS>=86400?'':IVS>=3600?` ${pad(d.getUTCHours())}h`:` ${hm(d)}`);};
 const px = v => v==null ? '—' : v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fr = v => v==null ? '—' : (v>0?'+':'')+v.toFixed(2)+'R';
 const tzLabel = () => tz ? 'UTC+7' : 'UTC';
@@ -208,7 +211,7 @@ function tickFmt(time,type){const d=dt(time);
   if(type===0) return String(d.getUTCFullYear());
   if(type===1) return 'Th'+(d.getUTCMonth()+1);
   if(type===2) return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}`;
-  return `${pad(d.getUTCHours())}:00`;}
+  return hm(d);}
 chart.applyOptions({timeScale:{tickMarkFormatter:tickFmt}});
 
 const candles = chart.addCandlestickSeries({upColor:C.up,downColor:C.down,wickUpColor:C.up,wickDownColor:C.down,borderVisible:false,priceFormat:{type:'price',precision:2,minMove:0.01}});
@@ -387,7 +390,7 @@ chart.subscribeCrosshairMove(p=>renderLegend(p.time!=null&&idxOf.has(p.time)?idx
 document.querySelectorAll('[data-span]').forEach(b=>b.addEventListener('click',()=>{
   const ts=chart.timeScale(), v=b.dataset.span;
   if(v==='all'){ts.fitContent();return;}
-  const r=ts.getVisibleLogicalRange(), span=+v, mid=r?(r.from+r.to)/2:N-span/2;
+  const r=ts.getVisibleLogicalRange(), span=Math.max(20,Math.round(+v*3600/IVS)), mid=r?(r.from+r.to)/2:N-span/2;
   let to=Math.min(N+5,mid+span/2);ts.setVisibleLogicalRange({from:to-span,to});
 }));
 document.getElementById('goto').addEventListener('change',e=>{
