@@ -18,6 +18,9 @@ const TFS = {
   '4h':  {label:'4h',   name:'H4',  ms:144e5, start:'2022-01-01'},
   '1d':  {label:'Ngày', name:'D1',  ms:864e5, start:'2019-01-01'},
 };
+// Bot 2 (2026-09-29): khung giao dịch -> khung lớn dùng lọc lệnh theo trend (M15 <- H1, H1 <- H4).
+const HIGHER = {'15m': '1h', '1h': '4h'};
+const HIGHER_WARMUP_DAYS = 60;   // nến khung lớn lấy sớm hơn điểm bắt đầu để trend kịp hình thành
 // Tài sản có nút chọn trên trang (mã khác vẫn mở được bằng ?symbol=, chỉ không có seed).
 const ASSETS = {BTCUSDT: 'BTC', XAUUSDT: 'Vàng XAU'};
 const SYMBOL = (q.get('symbol') || 'BTCUSDT').toUpperCase();
@@ -150,6 +153,14 @@ async function fetchClosed(tf, startMs, token){
 }
 const fetchAfter = async (c, token) =>
   (await fetchClosed(c.tf, c.lastT + TFS[c.tf].ms, token)).filter(r => r[0] > c.lastT);
+// Nến khung lớn đã đóng chưa đưa vào Bot2 (khung không lọc thì rỗng). Gọi SAU khi đã có nến
+// khung nhỏ để nến khung lớn đóng cùng lúc cũng có mặt.
+async function fetchHigher(c, token){
+  const htf = HIGHER[c.tf]; if (!htf) return [];
+  const from = c.hLastT != null ? c.hLastT + TFS[htf].ms
+                                : Date.parse(c.start + 'T00:00:00Z') - HIGHER_WARMUP_DAYS * 864e5;
+  return (await fetchClosed(htf, from, token)).filter(r => c.hLastT == null || r[0] > c.hLastT);
+}
 
 // ---- Bot2 trong worker ----
 const worker = new Worker('web/worker.js?v=' + (window.BOT2_VERSION || Date.now()));
@@ -161,12 +172,12 @@ worker.onmessage = ev => {
   m.error ? p.reject(new Error(m.error)) : p.resolve(m);
 };
 // rows: nến mới cần thêm; c.n > 0 -> tính tiếp từ trạng thái c (trong worker hoặc c.ckpt).
-const runBot = (c, rows, stage = () => {}) => new Promise((resolve, reject) => {
+const runBot = (c, rows, higher, stage = () => {}) => new Promise((resolve, reject) => {
   const id = ++seq; waiting.set(id, {resolve, reject, stage});
   const base = c.n > 0 ? {n: c.n, lastT: c.lastT, ckpt: c.ckpt} : null;
-  worker.postMessage({id, key: c.key, rows, base, source: SOURCE, wantCkpt: true});
+  worker.postMessage({id, key: c.key, rows, higher, base, source: SOURCE, wantCkpt: true});
 });
-const adopt = (c, m) => { c.n = m.n; c.lastT = m.lastT; c.ckpt = m.ckpt; };
+const adopt = (c, m) => { c.n = m.n; c.lastT = m.lastT; c.ckpt = m.ckpt; c.hLastT = JSON.parse(m.payload).hLast ?? null; };
 
 function render(payload, c, reset){
   payload.iv = TFS[c.tf].ms / 1000;
@@ -182,7 +193,7 @@ function render(payload, c, reset){
   }
   showOverlay(false);
 }
-const save = (c, payloadJson) => store.put(c.key, {version: VERSION, start: c.start, n: c.n, lastT: c.lastT,
+const save = (c, payloadJson) => store.put(c.key, {version: VERSION, start: c.start, n: c.n, lastT: c.lastT, hLastT: c.hLastT,
                                                    ckpt: c.ckpt, payload: payloadJson, savedAt: Date.now()});
 
 // Có nến mới đóng -> Bot2 chỉ tính thêm các nến đó, lưu lại.
@@ -193,8 +204,10 @@ async function syncClosed(){
   try {
     const fresh = await fetchAfter(c, token);
     if (!fresh.length || token !== loadToken) return;
+    const higher = await fetchHigher(c, token);
+    if (token !== loadToken) return;
     setStatus(box.dataset.s, 'Nến vừa đóng — Bot2 đang tính thêm…');
-    const m = await runBot(c, fresh);
+    const m = await runBot(c, fresh, higher);
     if (token !== loadToken) return;
     adopt(c, m); render(JSON.parse(m.payload), c, false); save(c, m.payload);
     setStatus(box.dataset.s, `Bot2 cập nhật ${clock()} (+${m.added} nến, ${(m.ms/1000).toFixed(1)}s)`);
@@ -227,11 +240,11 @@ async function show(tf){
     if (token !== loadToken) return;
     const seed = seeds && seeds[tf];
     const want = START_PARAM || (seed ? seed.start : fallbackStart(tf));
-    const c = cur = {tf, key, start: want, n: 0, lastT: null, ckpt: null, loading: true};
+    const c = cur = {tf, key, start: want, n: 0, lastT: null, hLastT: null, ckpt: null, loading: true};
     let shown = false, pending = null;   // pending: dữ liệu chart chưa lưu vào IndexedDB
 
     if (saved && saved.version === VERSION && saved.start <= want && saved.ckpt && saved.payload) {
-      Object.assign(c, {start: saved.start, n: saved.n, lastT: saved.lastT, ckpt: saved.ckpt});
+      Object.assign(c, {start: saved.start, n: saved.n, lastT: saved.lastT, hLastT: saved.hLastT ?? null, ckpt: saved.ckpt});
       render(JSON.parse(saved.payload), c, !first); shown = true;
       setStatus('poll', `Bản lưu ${new Date(saved.savedAt).toLocaleString('vi-VN',{hour12:false})} — đang lấy nến mới…`);
     } else if (seed && seed.start <= want) {
@@ -242,7 +255,7 @@ async function show(tf){
         fetch(`${seed.pkl}?v=${VERSION}`).then(r => { if (!r.ok) throw new Error('seed ' + r.status); return r.arrayBuffer(); }),
       ]);
       if (token !== loadToken) return;
-      Object.assign(c, {start: seed.start, n: seed.bars, lastT: seed.last, ckpt});
+      Object.assign(c, {start: seed.start, n: seed.bars, lastT: seed.last, hLastT: seed.hLast ?? null, ckpt});
       render(JSON.parse(text), c, !first); shown = true; pending = text;
       setStatus('poll', 'Dữ liệu tính sẵn — đang lấy nến mới…');
     }
@@ -253,9 +266,12 @@ async function show(tf){
       const rows = await fetchClosed(tf, Date.parse(want + 'T00:00:00Z'), token);
       if (token !== loadToken) return;
       if (!rows.length) throw new Error(`${FEED_NAME} không trả về nến nào.`);
+      if (HIGHER[tf]) setBoot(`Đang tải nến ${TFS[HIGHER[tf]].name} để lọc theo trend khung lớn…`);
+      const higher = await fetchHigher(c, token);
+      if (token !== loadToken) return;
       running = true;
       try {
-        const m = await runBot(c, rows, setBoot);
+        const m = await runBot(c, rows, higher, setBoot);
         if (token !== loadToken) return;
         adopt(c, m); render(JSON.parse(m.payload), c, !first); save(c, m.payload);
         setStatus('poll', `Bot2 xong (${m.added.toLocaleString('vi-VN')} nến, ${(m.ms/1000).toFixed(1)}s) — đang nối WebSocket…`);
@@ -265,9 +281,11 @@ async function show(tf){
       const fresh = await fetchAfter(c, token);
       if (token !== loadToken) return;
       if (fresh.length) {
+        const higher = await fetchHigher(c, token);
+        if (token !== loadToken) return;
         running = true;
         try {
-          const m = await runBot(c, fresh);
+          const m = await runBot(c, fresh, higher);
           if (token !== loadToken) return;
           adopt(c, m); render(JSON.parse(m.payload), c, false); pending = m.payload;
           setStatus(box.dataset.s, `Bot2 tính thêm ${m.added.toLocaleString('vi-VN')} nến (${(m.ms/1000).toFixed(1)}s)`);

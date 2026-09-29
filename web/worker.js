@@ -2,6 +2,7 @@
 // Bot2 của mỗi khung là một IncrementalChart (data/chart_template/incremental.py):
 //  - nạp từ trạng thái đã lưu (pickle: seed tính sẵn trên GitHub hoặc bản lưu IndexedDB),
 //  - thêm nến mới [open_time_ms, o, h, l, c] rồi trả dữ liệu chart (JSON),
+//  - khung 15m/1h: thêm trước nến khung lớn (1h/4h) để lọc lệnh theo trend khung lớn,
 //  - khi được hỏi thì trả lại trạng thái (pickle) để trang lưu cho lần sau.
 const PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v0.28.3/full/';
 importScripts(PYODIDE + 'pyodide.js');
@@ -29,20 +30,30 @@ from trading_bot.core.models import Bar
 from incremental import IncrementalChart
 
 CHARTS = {}
+# Khung giao dịch -> (phút khung, phút khung lớn dùng lọc trend). Key kết thúc bằng "|<khung>".
+HIGHER = {"15m": (15, 60), "1h": (60, 240)}
 
 def load(key, blob):
     # blob: Uint8Array từ JS (JsProxy), hoặc null/undefined. Pyodide mới đổi JS null thành
     # JsNull (khác None), nên kiểm tra theo to_bytes thay vì "is not None".
-    CHARTS[key] = pickle.loads(blob.to_bytes()) if hasattr(blob, "to_bytes") else IncrementalChart()
+    if hasattr(blob, "to_bytes"):
+        CHARTS[key] = pickle.loads(blob.to_bytes())
+    else:
+        minutes, higher = HIGHER.get(key.split("|")[-1], (None, None))
+        CHARTS[key] = IncrementalChart(minutes=minutes, higher_minutes=higher)
     return len(CHARTS[key])
 
-def add(key, rows_json, source):
+def add(key, rows_json, source, higher_json):
     chart = CHARTS[key]
+    for r in json.loads(higher_json or "[]"):
+        chart.add_higher(datetime.fromtimestamp(r[0] / 1000, tz=timezone.utc), r[1], r[2], r[3], r[4])
     for r in json.loads(rows_json):
         chart.add(Bar(index=len(chart), open=r[1], high=r[2], low=r[3], close=r[4],
                       timestamp=datetime.fromtimestamp(r[0] / 1000, tz=timezone.utc)))
     payload = chart.payload()
     payload["src"] = source
+    last = chart.higher_last_open
+    payload["hLast"] = int(last.timestamp() * 1000) if last is not None else None
     return json.dumps(payload, separators=(",", ":"))
 
 def dump(key):
@@ -55,11 +66,11 @@ def drop(key):
   return {py, load: g('load'), add: g('add'), dump: g('dump'), drop: g('drop')};
 }
 
-// {op:'run', key, rows (chỉ nến mới), base: {n, lastT, ckpt?}, source, wantCkpt}
+// {op:'run', key, rows (chỉ nến mới), higher (nến khung lớn mới), base: {n, lastT, ckpt?}, source, wantCkpt}
 //   base.n/lastT: Bot2 đang ở nến thứ n (nến cuối lastT); ckpt: pickle của trạng thái đó (nếu có).
 //   base = null -> chạy từ đầu với rows.
 self.onmessage = async ev => {
-  const {id, key, rows, base, source, wantCkpt} = ev.data;
+  const {id, key, rows, higher, base, source, wantCkpt} = ev.data;
   try {
     if (!ready) { self.postMessage({id, stage: 'Đang tải Python (Pyodide)…'}); ready = boot(); }
     const bot = await ready;
@@ -72,7 +83,7 @@ self.onmessage = async ev => {
     }
     if (base && rows.length) self.postMessage({id, stage: `Bot2 tính thêm ${rows.length.toLocaleString('vi-VN')} nến mới…`});
     const t0 = performance.now();
-    const json = bot.add(key, JSON.stringify(rows), source);
+    const json = bot.add(key, JSON.stringify(rows), source, JSON.stringify(higher || []));
     const n = (base ? base.n : 0) + rows.length;
     const lastT = rows.length ? rows[rows.length - 1][0] : base.lastT;
     sessions.delete(key); sessions.set(key, {n, lastT});

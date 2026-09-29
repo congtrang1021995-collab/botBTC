@@ -3,15 +3,20 @@
 Chỉ giữ những gì chart cần (OHLC, EMA, sổ lệnh, lịch sử stop của lệnh đang mở) thay vì toàn bộ
 ProcessResult của mọi nến, nên nhẹ bộ nhớ và pickle được. Nạp lại bằng pickle rồi ``add`` các
 nến mới là tiếp tục đúng chỗ, không phải chạy lại lịch sử. Kết quả giống hệt chạy một lượt.
+
+Bot 2 (2026-09-29): ``higher_minutes`` bật lọc lệnh theo trend khung lớn (M15 <- H1, H1 <- H4).
+Nến khung lớn đưa vào bằng ``add_higher`` TRƯỚC các nến khung nhỏ đóng cùng lúc hoặc sau nó.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timedelta
 
 from trading_bot.backtest.metrics import ClosedTradeTracker, calculate_trade_metrics
 from trading_bot.config import StrategyConfig
 from trading_bot.core.engine import TradingEngine
+from trading_bot.core.higher_tf import HigherTrendFeed
 from trading_bot.core.models import Bar, PositionSide
 
 
@@ -20,8 +25,16 @@ def r2(value: float | None) -> float | None:
 
 
 class IncrementalChart:
-    def __init__(self, config: StrategyConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: StrategyConfig | None = None,
+        minutes: int | None = None,
+        higher_minutes: int | None = None,
+    ) -> None:
         self.engine = TradingEngine(config)
+        # Lọc theo trend khung lớn: cần biết độ dài nến khung nhỏ để tính giờ đóng nến.
+        self.higher = HigherTrendFeed(higher_minutes, config) if higher_minutes and minutes else None
+        self.step = timedelta(minutes=minutes) if minutes else None
         self.tracker = ClosedTradeTracker()
         self.t: list[int] = []
         self.o: list[float] = []
@@ -39,10 +52,21 @@ class IncrementalChart:
     def __len__(self) -> int:
         return len(self.t)
 
+    def add_higher(self, timestamp: datetime, open_: float, high: float, low: float, close: float) -> bool:
+        """Thêm nến khung lớn đã đóng; không bật lọc hoặc nến cũ/trùng thì bỏ qua."""
+        return self.higher is not None and self.higher.add(timestamp, open_, high, low, close)
+
+    @property
+    def higher_last_open(self) -> datetime | None:
+        return self.higher.last_open if self.higher is not None else None
+
     def add(self, bar: Bar) -> None:
         if bar.index != len(self.t):
             raise ValueError(f"bar index {bar.index} phải bằng {len(self.t)}")
-        result = self.engine.process_bar(bar)
+        if self.higher is None:
+            result = self.engine.process_bar(bar)
+        else:
+            result = self.engine.process_bar(bar, self.higher.trend_at(bar.timestamp + self.step))
         self.t.append(int(bar.timestamp.timestamp()))
         self.o.append(round(bar.open, 3))
         self.h.append(round(bar.high, 3))

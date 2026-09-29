@@ -54,6 +54,23 @@ class IncrementalChartTest(unittest.TestCase):
             chart.add(bar)
         self.assertEqual(chart.closed, extract_closed_trades(run_backtest(bars)))
 
+    def test_higher_timeframe_filter_matches_backtest_and_survives_pickle(self) -> None:
+        bars = wave_bars(2400)
+        higher = [Bar(index=i // 4, open=bars[i].open, high=max(b.high for b in bars[i:i + 4]),
+                      low=min(b.low for b in bars[i:i + 4]), close=bars[i + 3].close,
+                      timestamp=bars[i].timestamp) for i in range(0, 2400, 4)]
+        expected = extract_closed_trades(run_backtest(bars, higher_bars=higher))
+        chart = IncrementalChart(minutes=60, higher_minutes=240)
+        for i, bar in enumerate(bars):
+            if i == 1200:
+                chart = pickle.loads(pickle.dumps(chart))
+            for hb in higher:
+                if hb.timestamp + timedelta(hours=4) <= bar.timestamp + timedelta(hours=1):
+                    chart.add_higher(hb.timestamp, hb.open, hb.high, hb.low, hb.close)
+            chart.add(bar)
+        self.assertEqual(chart.closed, expected)
+        self.assertNotEqual(expected, extract_closed_trades(run_backtest(bars)))
+
     def test_rejects_out_of_order_bar(self) -> None:
         chart = IncrementalChart()
         bars = wave_bars(3)

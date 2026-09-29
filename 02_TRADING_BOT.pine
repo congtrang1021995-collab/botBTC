@@ -17,8 +17,10 @@
 // thì nới stop ra đủ mốc; TP 10R và trailing tính theo 1R mới. Input "1R tối thiểu", 0 = tắt.
 // Bot 2 Step 1 (2026-09-29, v3.11): BỎ điều kiện độ dốc EMA34 13 nến (input "Dùng điều kiện
 // độ dốc n2" mặc định tắt). Trend quay về rule cũ: duy trì chỉ cần EMA34 >= EMA89.
+// Bot 2 Step 3 (2026-09-29, v3.12): lọc tín hiệu theo trend khung lớn — chart M15 lọc theo H1,
+// chart H1 lọc theo H4 (nến khung lớn đã đóng). "Lỏng" = chặn khi khung lớn ngược hướng.
 strategy(
-     title = "Investment System Bot 2 — Steps 1–7 v3.11 (bỏ slope 13 nến, k=5, 1 lệnh/setup, 1R tối thiểu 10, exit khi đảo chiều trend)",
+     title = "Investment System Bot 2 — Steps 1–7 v3.12 (bỏ slope 13 nến, lọc trend M15<-H1/H1<-H4, k=5, 1 lệnh/setup, 1R tối thiểu 10, exit khi đảo chiều trend)",
      shorttitle = "ISBot2",
      overlay = true,
      pyramiding = 100,
@@ -50,6 +52,7 @@ bool requireTrendMaintenanceFilter = input.bool(true, "Chỉ giữ trend khi EMA
 
 bool enableValueZoneSetup = input.bool(true, "Bật Value Zone Setup", group = GROUP_SETUP)
 bool enableBreakoutSetup = input.bool(true, "Bật Breakout Setup", group = GROUP_SETUP)
+string higherTfFilter = input.string("Lỏng", "Lọc theo trend khung lớn (Bot 2)", options = ["Lỏng", "Chặt", "Tắt"], tooltip = "2026-09-29: chart M15 lọc theo trend H1, chart H1 lọc theo trend H4 (nến khung lớn đã đóng); khung khác không lọc. Lỏng = bỏ tín hiệu khi khung lớn NGƯỢC hướng (SIDEWAY vẫn vào). Chặt = khung lớn phải cùng hướng. Tín hiệu bị bỏ cũng xóa trạng thái chờ Value Zone.", group = GROUP_SETUP)
 int maxTradesPerSetup = input.int(1, "Số lệnh mở tối đa mỗi loại setup (Bot 2)", minval = 0, maxval = 100, tooltip = "1 = tối đa 1 lệnh Breakout + 1 lệnh Value Zone đang mở (tổng 2 lệnh). Tín hiệu mới của loại đã có lệnh mở bị bỏ qua; loại còn lại vẫn vào bình thường. 0 = không giới hạn như bot gốc.", group = GROUP_SETUP)
 
 int atrLength = input.int(13, "ATR Length", minval = 1, group = GROUP_RISK)
@@ -303,6 +306,13 @@ if pendingOrderFilled
     pendingQuantity := na
     pendingEntryId := ""
 bool processClosedBar = barstate.isconfirmed and bar_index != lastProcessedBar
+// Bot 2 (2026-09-29): trend khung lớn. lookahead_off -> nến khung nhỏ cuối cùng của mỗi nến
+// khung lớn mới thấy trend của nến khung lớn đó (cùng lúc đóng), các nến trước thấy nến khung
+// lớn trước — không nhìn trước, khớp engine Python.
+string higherTf = timeframe.period == "15" ? "60" : timeframe.period == "60" ? "240" : ""
+bool useHigherTf = higherTfFilter != "Tắt" and higherTf != ""
+int higherTrendState = useHigherTf ? request.security(syminfo.tickerid, higherTf == "" ? timeframe.period : higherTf, trendState, lookahead = barmerge.lookahead_off) : na
+
 if processClosedBar
     // STEP 0 — Đối soát từng trade với broker và dời stop độc lập.
     bool tradeJustClosed = strategy.closedtrades > lastClosedTrades
@@ -524,6 +534,14 @@ if processClosedBar
             scheduledSide := ENTRY_NONE
             scheduledSource := SOURCE_NONE
 
+        // Bot 2 (2026-09-29): bỏ tín hiệu ngược trend khung lớn, xóa luôn trạng thái chờ Value Zone.
+        bool higherTfBlocked = scheduledSide != ENTRY_NONE and useHigherTf and not na(higherTrendState) and (higherTfFilter == "Chặt" ? (scheduledSide == ENTRY_LONG ? higherTrendState != TREND_UP : higherTrendState != TREND_DOWN) : (scheduledSide == ENTRY_LONG ? higherTrendState == TREND_DOWN : higherTrendState == TREND_UP))
+        if higherTfBlocked
+            scheduledSide := ENTRY_NONE
+            scheduledSource := SOURCE_NONE
+            waitingValueZoneSide := ENTRY_NONE
+            valueZoneEntryEma := EMA_NONE
+
         float frozenSwing = scheduledSide == ENTRY_LONG ? protectedSwingLow : scheduledSide == ENTRY_SHORT ? protectedSwingHigh : na
         if scheduledSide != ENTRY_NONE and not na(frozenSwing)
             // Frozen Swing và hard stop được chốt tại nến xác nhận. TP chỉ được
@@ -636,6 +654,7 @@ plot(trendState, "Trend State", display = display.data_window)
 plot(emaFastSlope, "EMA Slope", display = display.data_window)
 plot(emaFastConfirmSlope, "EMA Confirm Slope (Bot 2)", display = display.data_window)
 plot(minConfirmSlope, "Confirm Slope Threshold (Bot 2)", display = display.data_window)
+plot(higherTrendState, "Higher TF Trend State (Bot 2)", display = display.data_window)
 plot(positiveDeltaRatio, "Positive Delta Ratio", display = display.data_window)
 plot(negativeDeltaRatio, "Negative Delta Ratio", display = display.data_window)
 plot(activeEntryPrice, "Active Entry Price", display = display.data_window)

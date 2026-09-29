@@ -43,8 +43,13 @@
 > XAUUSD 2025-01→2026-09 — ở bước xác nhận điều kiện không có tác dụng (điều kiện 8 nến đã bao
 > hàm), ở bước duy trì làm ~45% số nến thành `SIDEWAY` và cắt lệnh Value Zone. H1: +33.4R →
 > +58.6R; M15: +24.6R → +78.3R; thời gian giữ lệnh / đóng lệnh khi đảo chiều không chậm hơn.
+>
+> Cập nhật 2026-09-29 — **Step 3 v1.9**: **lọc tín hiệu theo trend khung lớn** — M15 lọc theo
+> H1, H1 lọc theo H4, kiểu **lỏng** (`higher_tf_filter = "lenient"`): bỏ tín hiệu khi trend nến
+> khung lớn đã đóng **ngược hướng**; khung lớn `SIDEWAY` vẫn vào (mục 22.1). Backtest MT5 XAUUSD
+> 2025-01→2026-09: M15 +78.3R → +139.8R (DD 27.0 → 17.6R), H1 +58.6R → +74.6R (DD 18.6 → 15.3R).
 
-## Step 1–3 — Trend, Setup & Entry v1.8 (Bot 2)
+## Step 1–3 — Trend, Setup & Entry v1.9 (Bot 2)
 
 Tài liệu này là file đặc tả trung tâm của bot. Các bước tiếp theo sẽ được bổ sung tuần tự vào chính file này theo thứ tự:
 
@@ -651,6 +656,41 @@ BREAKOUT_SHORT_ENTRY_CONFIRMED =
 
 Tín hiệu chỉ được tạo tại cạnh chuyển `FALSE -> TRUE` của Breakout Setup. Long
 hoặc Short vào tại Open nến kế tiếp theo mục 20.1.
+
+### 22.1. Lọc theo trend khung lớn (Bot 2, 2026-09-29)
+
+Mỗi khung giao dịch lọc theo khung ngay trên nó:
+
+| Khung giao dịch | Khung lọc |
+|---|---|
+| M15 | H1 |
+| H1 | H4 |
+| Khung khác | không lọc |
+
+`Higher_Trend` là trend Step 1 (cùng rule, cùng tham số) của **nến khung lớn mới nhất đã đóng
+tại thời điểm nến khung nhỏ đóng**. Ví dụ nến M15 09:45–10:00 dùng nến H1 09:00–10:00 (cùng
+đóng lúc 10:00); nến M15 10:00–10:15 vẫn dùng H1 09:00–10:00. Không dùng nến khung lớn đang chạy.
+
+```text
+Lỏng (mặc định, higher_tf_filter = "lenient"):
+    Long  bị bỏ khi Higher_Trend == DOWNTREND
+    Short bị bỏ khi Higher_Trend == UPTREND
+Chặt (higher_tf_filter = "strict"):
+    Long  cần Higher_Trend == UPTREND
+    Short cần Higher_Trend == DOWNTREND
+```
+
+- Chỉ xét tín hiệu vừa xác nhận ở nến này (sau khi đã qua slot và điều kiện cùng chiều vị
+  thế). Tín hiệu bị bỏ thì **xóa luôn trạng thái chờ và EMA tham chiếu của Value Zone**; muốn
+  vào lại cần setup mới (giống khi slot đầy, mục 21). Reason: `HIGHER_TF_TREND_FILTER`.
+- Không ảnh hưởng trend, setup, stop, TP hay việc đóng lệnh của khung nhỏ.
+- Chưa có nến khung lớn nào đã đóng thì không lọc.
+- Python: `TradingEngine.process_bar(bar, higher_trend)`, trend khung lớn lấy từ
+  `trading_bot.core.higher_tf.HigherTrendFeed`; backtest `--higher <csv khung lớn>`. Bot MT5 tự
+  lấy khung lớn (`--no-higher-filter` để tắt) và chờ nến khung lớn cùng giờ đóng xuất hiện
+  (tối đa 120 giây). Pine: input `Lọc theo trend khung lớn` (`request.security`, không nhìn trước).
+- Lý do (MT5 XAUUSD 2025-01→2026-09): 362/947 lệnh M15 ngược trend H1 tổng −53.5R; lọc lỏng tốt
+  hơn lọc chặt (lệnh lúc khung lớn `SIDEWAY` vẫn có lãi). Thêm H4 vào bộ lọc M15 không cải thiện.
 
 ### 23. Output của Step 3
 

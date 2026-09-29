@@ -34,6 +34,10 @@ from trading_bot.core.models import Bar  # noqa: E402
 ARCHIVE = "https://data.binance.vision/data/futures/um"
 # Mã có seed và ngày sớm nhất có dữ liệu (BTC: kho futures từ 01/2020; XAU: niêm yết 11/12/2025).
 SYMBOLS = {"BTCUSDT": date(2020, 1, 1), "XAUUSDT": date(2025, 12, 1)}
+# Bot 2 (2026-09-29): khung lọc lệnh theo trend khung lớn, trùng HIGHER trong web/app.js.
+HIGHER = {"15m": "1h", "1h": "4h"}
+HIGHER_WARMUP_DAYS = 60
+MINUTES = {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 # Lịch sử seed mỗi khung: "days" = số ngày gần nhất, "start" = từ ngày cố định.
 SEEDS = {
     "5m": {"days": 270},
@@ -115,8 +119,24 @@ def build(out: Path, version: str) -> None:
                     rows = download(symbol, interval, start, pool)
                     if not rows:
                         raise RuntimeError("không có nến")
-                    chart = IncrementalChart()
+                    # Bot 2: 15m/1h lọc lệnh theo trend khung lớn (1h/4h), giống app.js.
+                    higher_interval = HIGHER.get(interval)
+                    higher = []
+                    if higher_interval:
+                        higher = download(symbol, higher_interval,
+                                          max(start - timedelta(days=HIGHER_WARMUP_DAYS), first_day), pool)
+                    chart = IncrementalChart(minutes=MINUTES[interval],
+                                             higher_minutes=MINUTES.get(higher_interval))
+                    step_ms = MINUTES[interval] * 60_000
+                    higher_ms = MINUTES.get(higher_interval, 0) * 60_000
+                    h = 0
                     for i, r in enumerate(rows):
+                        # Nến khung lớn đã đóng tới lúc nến này đóng.
+                        while h < len(higher) and higher[h][0] + higher_ms <= r[0] + step_ms:
+                            hr = higher[h]
+                            chart.add_higher(datetime.fromtimestamp(hr[0] / 1000, tz=timezone.utc),
+                                             hr[1], hr[2], hr[3], hr[4])
+                            h += 1
                         chart.add(Bar(index=i, open=r[1], high=r[2], low=r[3], close=r[4],
                                       timestamp=datetime.fromtimestamp(r[0] / 1000, tz=timezone.utc)))
                     payload = chart.payload()
@@ -124,7 +144,9 @@ def build(out: Path, version: str) -> None:
                     key = f"{symbol}-futures-{interval}"
                     (out / f"{key}.json").write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
                     (out / f"{key}.pkl").write_bytes(pickle.dumps(chart, protocol=5))
+                    last_higher = chart.higher_last_open
                     seeds[interval] = {"start": start.isoformat(), "last": rows[-1][0], "bars": len(rows),
+                                       "hLast": int(last_higher.timestamp() * 1000) if last_higher else None,
                                        "json": f"seed/{key}.json", "pkl": f"seed/{key}.pkl"}
                     print(f"seed {symbol} {interval}: {len(rows)} nến từ {start} · {len(payload['trades'])} lệnh · "
                           f"{time.perf_counter() - began:.1f}s", flush=True)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from trading_bot.config import StrategyConfig
 from trading_bot.core.models import (
@@ -225,6 +225,42 @@ def _same_direction_or_flat(
 ) -> bool:
     """Only same-direction trades may overlap."""
     return all(position.side == side for position in state.open_positions)
+
+def filter_by_higher_trend(
+    decision: EntryDecision,
+    context: BarContext,
+    higher_trend: TrendState | None,
+    config: StrategyConfig,
+) -> EntryDecision:
+    """Bot 2 (2026-09-29): chặn tín hiệu mới ngược trend khung lớn.
+
+    Chỉ xét tín hiệu vừa xác nhận ở nến này. Bị chặn thì bỏ tín hiệu và xóa trạng thái
+    chờ Value Zone (giống khi slot đầy): muốn vào lại phải có setup mới.
+    """
+    pending = decision.pending_entry
+    if (
+        pending is None
+        or pending.signal_bar_index != context.bar.index
+        or higher_trend is None
+        or config.higher_tf_filter == "off"
+    ):
+        return decision
+    wanted = TrendState.UPTREND if pending.side == PositionSide.LONG else TrendState.DOWNTREND
+    opposite = TrendState.DOWNTREND if pending.side == PositionSide.LONG else TrendState.UPTREND
+    allowed = higher_trend == wanted if config.higher_tf_filter == "strict" else higher_trend != opposite
+    if allowed:
+        return decision
+    return replace(
+        decision,
+        side=None,
+        source_setup=None,
+        signal_bar_index=None,
+        pending_entry=None,
+        value_zone_entry_side=None,
+        value_zone_entry_ema=None,
+        reason="HIGHER_TF_TREND_FILTER",
+    )
+
 
 def _scheduled_entry(
     context: BarContext,

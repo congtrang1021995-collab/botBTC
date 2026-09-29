@@ -178,5 +178,67 @@ class LiveTraderTests(unittest.TestCase):
             self.assertIn(1, again.tickets)
 
 
+class HigherTimeframeBroker(FakeBroker):
+    """Nến H1 + H4 riêng; H4 đang chạy do test đặt."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.h4 = [RawBar(T0 - 4 * HOUR * (3 - i), 100.0, 101.0, 99.0, 100.0) for i in range(3)]
+        self.h4_forming = T0
+
+    def closed_bars(self, timeframe, count):
+        return (self.h4 if timeframe == "H4" else self.bars)[-count:]
+
+    def forming_bar_open(self, timeframe):
+        return self.h4_forming if timeframe == "H4" else self.bars[-1].time + HOUR
+
+
+class RecordingEngine(StubEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.higher_trends: list = []
+
+    def process_bar(self, bar, higher_trend=None):
+        self.higher_trends.append(higher_trend)
+        return super().process_bar(bar)
+
+
+class HigherTimeframeTraderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.broker = HigherTimeframeBroker()
+        self.engine = RecordingEngine()
+        self.now = [T0 + 3 * HOUR + timedelta(seconds=5)]
+
+    def test_warmup_loads_higher_bars_and_passes_trend(self) -> None:
+        trader = make_trader(self.broker, self.engine, self.now, higher_timeframe="H4")
+        trader.start()
+        self.assertEqual(len(trader.higher), 3)
+        self.assertEqual(len(self.engine.higher_trends), 3)
+        self.assertTrue(all(t is not None for t in self.engine.higher_trends))
+
+    def test_waits_for_higher_bar_that_closes_with_base_bar(self) -> None:
+        trader = make_trader(self.broker, self.engine, self.now, higher_timeframe="H4")
+        trader.start()
+        # H1 03:00 đóng lúc 04:00 = lúc H4 00:00 đóng, nhưng MT5 chưa có H4 00:00 -> chờ.
+        self.broker.bars.append(RawBar(T0 + 3 * HOUR, 100.0, 101.0, 99.0, 100.0))
+        self.now[0] = T0 + 4 * HOUR + timedelta(seconds=2)
+        self.assertFalse(trader.poll())
+        self.assertEqual(len(self.engine.higher_trends), 3)
+        self.broker.h4.append(RawBar(T0, 100.0, 101.0, 99.0, 100.0))
+        self.broker.h4_forming = T0 + 4 * HOUR
+        self.assertTrue(trader.poll())
+        self.assertEqual(len(trader.higher), 4)
+        self.assertEqual(len(self.engine.higher_trends), 4)
+
+    def test_gives_up_waiting_after_timeout(self) -> None:
+        trader = make_trader(self.broker, self.engine, self.now, higher_timeframe="H4")
+        trader.start()
+        self.broker.bars.append(RawBar(T0 + 3 * HOUR, 100.0, 101.0, 99.0, 100.0))
+        self.now[0] = T0 + 4 * HOUR + timedelta(seconds=2)
+        self.assertFalse(trader.poll())
+        self.now[0] += timedelta(seconds=200)
+        self.assertTrue(trader.poll())
+
+
 if __name__ == "__main__":
     unittest.main()

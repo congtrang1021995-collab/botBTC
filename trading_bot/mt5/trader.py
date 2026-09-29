@@ -10,6 +10,10 @@ backtest, rồi đồng bộ:
 3. Lệnh engine đã đóng (đảo chiều trend, stop, TP) mà MT5 còn mở thì đóng market.
 4. Engine có lệnh chờ vào tại Open nến kế tiếp -> gửi lệnh market ngay, kèm SL/TP.
 
+Bot 2 (2026-09-29): nếu có ``higher_timeframe`` (M15 <- H1, H1 <- H4), trader giữ một engine
+khung lớn chỉ để lấy trend; tín hiệu mới ngược trend nến khung lớn đã đóng bị bỏ
+(``config.higher_tf_filter``). Nến khung nhỏ chờ tới khi nến khung lớn cùng giờ đóng đã có.
+
 Stop/TP trong nến do server MT5 tự khớp. Trạng thái (ticket <-> khóa) lưu JSON nên
 khởi động lại vẫn nhận lại lệnh cũ; engine được làm nóng lại từ lịch sử.
 """
@@ -24,6 +28,7 @@ from typing import Callable, Protocol
 
 from trading_bot.config import StrategyConfig
 from trading_bot.core.engine import ProcessResult, TradingEngine
+from trading_bot.core.higher_tf import HigherTrendFeed
 from trading_bot.core.models import Bar, PendingEntry, PositionSide, PositionState
 from trading_bot.mt5.broker import BrokerPosition, OrderResult, RawBar, TIMEFRAME_MINUTES
 from trading_bot.strategy.exit import calculate_take_profit_price
@@ -33,6 +38,8 @@ SETUP_SHORT = {"BREAKOUT_LONG": "BOL", "BREAKOUT_SHORT": "BOS",
                "VALUE_ZONE_LONG": "VZL", "VALUE_ZONE_SHORT": "VZS"}
 # Chỉ vào lệnh nếu còn trong phần đầu của nến (khởi động lại muộn thì bỏ tín hiệu).
 MAX_ENTRY_DELAY_FRACTION = 0.25
+# Nến khung lớn cùng giờ đóng chưa có sau chừng này giây thì xử lý tiếp (tránh treo).
+MAX_HIGHER_WAIT_SECONDS = 120
 
 
 class Broker(Protocol):
@@ -61,6 +68,7 @@ class LiveTrader:
     log_path: Path | None = None
     dry_run: bool = False
     config: StrategyConfig | None = None
+    higher_timeframe: str | None = None
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     say: Callable[[str], None] = print
     magic: int = field(init=False)
@@ -69,14 +77,22 @@ class LiveTrader:
     # ticket -> {"signal": iso giờ nến tín hiệu, "setup": tên, "key": khóa hoặc None}
     tickets: dict[int, dict] = field(init=False, default_factory=dict)
     sent_signals: set[str] = field(init=False, default_factory=set)
+    higher: HigherTrendFeed | None = field(init=False, default=None)
+    _higher_wait_since: datetime | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.magic = magic_for(self.timeframe)
         self.engine = TradingEngine(self.config)
+        if self.higher_timeframe:
+            self.higher = HigherTrendFeed(TIMEFRAME_MINUTES[self.higher_timeframe], self.config)
         self._load_state()
 
     # ---- vòng đời ----------------------------------------------------------
     def start(self) -> None:
+        if self.higher is not None:
+            self._refresh_higher(self.warmup_bars)
+            self.say(f"[{self.timeframe}] lọc theo trend {self.higher_timeframe}: "
+                     f"{len(self.higher)} nến, trend={self.higher.trends[-1].name if len(self.higher) else '-'}")
         bars = self.broker.closed_bars(self.timeframe, self.warmup_bars)
         for raw in bars:
             self._process(raw)
@@ -99,6 +115,9 @@ class LiveTrader:
                 break
         if not fresh:
             return False
+        step = timedelta(minutes=TIMEFRAME_MINUTES[self.timeframe])
+        if self.higher is not None and not self._higher_ready(fresh[-1].time + step):
+            return False  # chờ nến khung lớn cùng giờ đóng, thử lại vòng sau
         for raw in fresh:
             result = self._process(raw)
             self._log_bar(result)
@@ -110,12 +129,44 @@ class LiveTrader:
         self._save_state()
         return True
 
+    # ---- khung lớn ---------------------------------------------------------
+    def _refresh_higher(self, first_count: int = 500) -> None:
+        feed = self.higher
+        if feed.last_open is None:
+            rows = self.broker.closed_bars(self.higher_timeframe, first_count)
+        else:
+            for count in (5, 50, 500, first_count):
+                rows = self.broker.closed_bars(self.higher_timeframe, count)
+                if not rows or rows[0].time <= feed.last_open:
+                    break
+        for raw in rows:
+            feed.add(raw.time, raw.open, raw.high, raw.low, raw.close)
+
+    def _higher_ready(self, base_close: datetime) -> bool:
+        """Mọi nến khung lớn đóng trước/lúc ``base_close`` đã có trong feed chưa."""
+        self._refresh_higher()
+        forming = self.broker.forming_bar_open(self.higher_timeframe)
+        if forming is None or forming + self.higher.step > base_close:
+            self._higher_wait_since = None
+            return True
+        if self._higher_wait_since is None:
+            self._higher_wait_since = self.now()
+        waited = (self.now() - self._higher_wait_since).total_seconds()
+        if waited < MAX_HIGHER_WAIT_SECONDS:
+            return False
+        self._event("HIGHER_TF_LAGGING", higher=self.higher_timeframe, forming=forming.isoformat(),
+                    base_close=base_close.isoformat(), waited_seconds=int(waited))
+        self._higher_wait_since = None
+        return True
+
     # ---- engine ------------------------------------------------------------
     def _process(self, raw: RawBar) -> ProcessResult:
         bar = Bar(index=len(self.bar_times), open=raw.open, high=raw.high, low=raw.low,
                   close=raw.close, timestamp=raw.time)
         self.bar_times.append(raw.time)
-        return self.engine.process_bar(bar)
+        if self.higher is None:
+            return self.engine.process_bar(bar)
+        return self.engine.process_bar(bar, self._higher_trend_for(raw.time))
 
     def _key(self, position: PositionState) -> str:
         setup = position.source_setup.name if position.source_setup else "-"
@@ -265,6 +316,7 @@ class LiveTrader:
         self._append({"type": "bar", "tf": self.timeframe, "time": bar.timestamp.isoformat(),
                       "open": bar.open, "high": bar.high, "low": bar.low, "close": bar.close,
                       "trend": result.state.trend.name,
+                      "higher_trend": getattr(self._higher_trend_for(bar.timestamp), "name", None),
                       "open_positions": len(result.state.open_positions),
                       "events": [{"name": e.name, **e.payload} for e in result.events]})
 
@@ -280,9 +332,16 @@ class LiveTrader:
         ema = (f"EMA34={ind.ema_fast:.2f} EMA89={ind.ema_slow:.2f}"
                if ind.ema_fast is not None and ind.ema_slow is not None else "")
         setups = ",".join(s.name for s in sorted(result.state.active_setups, key=int)) or "-"
+        higher = self._higher_trend_for(bar.timestamp)
+        higher_text = f" {self.higher_timeframe}={higher.name}" if higher is not None else ""
         return (f"[{self.timeframe}] {_fmt(bar.timestamp)} close={bar.close:.2f} {ema} "
-                f"trend={result.state.trend.name} setup={setups} "
+                f"trend={result.state.trend.name}{higher_text} setup={setups} "
                 f"lệnh engine={len(result.state.open_positions)} lệnh MT5={len(self.tickets)}")
+
+    def _higher_trend_for(self, bar_time: datetime):
+        if self.higher is None:
+            return None
+        return self.higher.trend_at(bar_time + timedelta(minutes=TIMEFRAME_MINUTES[self.timeframe]))
 
     def _describe(self, position: PositionState) -> str:
         setup = position.source_setup.name if position.source_setup else "-"

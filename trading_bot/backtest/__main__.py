@@ -24,15 +24,22 @@ def main() -> None:
         type=Path,
         help="Optional path for the closed-trade ledger CSV.",
     )
+    parser.add_argument(
+        "--higher",
+        type=Path,
+        help="CSV nến khung lớn để lọc lệnh theo trend (Bot 2: M15 <- H1, H1 <- H4).",
+    )
     args = parser.parse_args()
 
     bars = load_bars_csv(args.csv_file)
-    report = run_backtest_report(bars)
+    higher_bars = load_bars_csv(args.higher) if args.higher is not None else None
+    report = run_backtest_report(bars, higher_bars=higher_bars)
     if args.trades_out is not None:
         _write_trades(args.trades_out, report)
 
     payload = {
         "input_bars": len(bars),
+        "higher_file": str(args.higher) if args.higher else None,
         "closed_trades": len(report.trades),
         "open_position_at_end": bool(
             report.results and report.results[-1].state.open_positions

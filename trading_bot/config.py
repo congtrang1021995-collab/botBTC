@@ -38,6 +38,11 @@ class StrategyConfig:
     # Bot 2 Step 3/6 (2026-09-24): số lệnh đang mở tối đa cho MỖI loại setup
     # (Breakout, Value Zone). 1 = tối đa 2 lệnh nắm giữ. 0 = không giới hạn (bot gốc).
     max_trades_per_setup_family: int = 1
+    # Bot 2 (2026-09-29): lọc lệnh theo trend khung lớn (M15 <- H1, H1 <- H4), chỉ áp khi
+    # engine được truyền trend khung lớn (process_bar(..., higher_trend=...)).
+    # "lenient" = chặn khi khung lớn NGƯỢC hướng (SIDEWAY vẫn vào); "strict" = khung lớn
+    # phải cùng hướng; "off" = tắt. Backtest MT5 XAUUSD: M15 +78R -> +140R, H1 +59R -> +75R.
+    higher_tf_filter: str = "lenient"
     atr_length: int = 13
     stop_atr_multiplier: float = 0.30
     # Bot 2 (2026-09-28): 1R tối thiểu, đơn vị GIÁ. Khi khớp lệnh mà khoảng cách
@@ -78,6 +83,8 @@ class StrategyConfig:
             raise ValueError("atr_length must be >= 1")
         if self.max_trades_per_setup_family < 0:
             raise ValueError("max_trades_per_setup_family must be >= 0")
+        if self.higher_tf_filter not in ("off", "lenient", "strict"):
+            raise ValueError("higher_tf_filter must be off, lenient or strict")
         if self.stop_atr_multiplier < 0.0:
             raise ValueError("stop_atr_multiplier must be >= 0")
         if self.min_initial_risk < 0.0:

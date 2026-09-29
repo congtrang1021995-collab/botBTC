@@ -6,7 +6,8 @@
     python -m trading_bot.mt5 --check                  # làm nóng, kiểm tra lệnh thử rồi thoát
 
 Mỗi khung dùng một magic number riêng (H1=902060, M15=902015); bot không động vào
-lệnh đặt tay hoặc của magic khác. Trạng thái và log nằm ở ``outputs/mt5_live/``.
+lệnh đặt tay hoặc của magic khác. Mỗi khung lọc lệnh theo trend khung kế trên
+(M15 <- H1, H1 <- H4; ``--no-higher-filter`` để tắt). Trạng thái và log nằm ở ``outputs/mt5_live/``.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 
+from trading_bot.core.higher_tf import HIGHER_TIMEFRAME
 from trading_bot.mt5.broker import TIMEFRAME_MINUTES, Mt5Broker
 from trading_bot.mt5.trader import LiveTrader
 
@@ -31,6 +33,8 @@ def main() -> None:
     parser.add_argument("--server-tz", default="auto", help="auto | utc | ny7 | +3 ...")
     parser.add_argument("--dry-run", action="store_true", help="Không gửi lệnh, chỉ in.")
     parser.add_argument("--check", action="store_true", help="Làm nóng + kiểm tra lệnh thử rồi thoát.")
+    parser.add_argument("--no-higher-filter", action="store_true",
+                        help="Tắt lọc theo trend khung lớn (M15 <- H1, H1 <- H4).")
     parser.add_argument("--poll", type=float, default=2.0, help="Giây giữa hai lần kiểm tra nến.")
     args = parser.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
@@ -48,11 +52,14 @@ def main() -> None:
             broker, tf, volume=args.volume, warmup_bars=args.warmup, dry_run=args.dry_run,
             state_path=Path(f"{prefix}_{tf}_state.json"),
             log_path=Path(f"{prefix}_{tf}_log.jsonl"),
+            higher_timeframe=None if args.no_higher_filter else HIGHER_TIMEFRAME.get(tf),
         )
         for tf in args.tf
     ]
     mode = "DRY-RUN (không gửi lệnh)" if args.dry_run else "ĐẶT LỆNH THẬT"
-    print(f"{args.symbol} {' + '.join(args.tf)} | {args.volume} lot/lệnh | {mode}")
+    filters = ", ".join(f"{t.timeframe}<-{t.higher_timeframe}" for t in traders if t.higher_timeframe)
+    print(f"{args.symbol} {' + '.join(args.tf)} | {args.volume} lot/lệnh | {mode}"
+          f" | lọc trend khung lớn: {filters or 'tắt'}")
 
     if args.check:
         # Chỉ đọc: không gửi lệnh, không ghi state.

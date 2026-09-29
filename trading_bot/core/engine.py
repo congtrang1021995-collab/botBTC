@@ -12,10 +12,11 @@ from trading_bot.core.models import (
     PositionState,
     PositionStatus,
     StrategyState,
+    TrendState,
 )
 from trading_bot.core.swings import SwingState, update_swings
 from trading_bot.strategy.add import AddDecision, evaluate_add
-from trading_bot.strategy.entry import EntryDecision, evaluate_entry
+from trading_bot.strategy.entry import EntryDecision, evaluate_entry, filter_by_higher_trend
 from trading_bot.strategy.exit import (
     ExitDecision,
     calculate_take_profit_price,
@@ -151,8 +152,12 @@ class TradingEngine:
             scoped = replace(scoped, position=position, positions=(position,))
         return evaluate_exit(context, scoped, self.config).should_exit
 
-    def process_bar(self, bar: Bar) -> ProcessResult:
-        """Process one closed bar. Bars must arrive in strictly increasing order."""
+    def process_bar(self, bar: Bar, higher_trend: TrendState | None = None) -> ProcessResult:
+        """Process one closed bar. Bars must arrive in strictly increasing order.
+
+        ``higher_trend``: trend khung lớn đã đóng tại lúc nến này đóng (Bot 2, lọc theo
+        ``config.higher_tf_filter``). None = không lọc.
+        """
         last_index = self._state.market.last_bar_index
         if last_index is not None and bar.index <= last_index:
             raise ValueError(
@@ -213,6 +218,7 @@ class TradingEngine:
             self.config,
             setup.started,
         )
+        entry = filter_by_higher_trend(entry, context, higher_trend, self.config)
         strategy_after_entry = replace(
             strategy_after_setup,
             value_zone_entry_side=entry.value_zone_entry_side,

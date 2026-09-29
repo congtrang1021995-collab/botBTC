@@ -84,7 +84,8 @@ python -m trading_bot.mt5 XAUUSD --tf H1 M15 --volume 0.1
 ```
 
 `--check` làm nóng rồi kiểm tra lệnh thử bằng `order_check` (không gửi), `--dry-run` chạy
-liên tục nhưng chỉ in lệnh sẽ đặt.
+liên tục nhưng chỉ in lệnh sẽ đặt. Mỗi khung tự lấy nến khung kế trên để lọc lệnh theo trend
+(M15 <- H1, H1 <- H4); `--no-higher-filter` để tắt.
 
 **Chart Vàng dùng nến MT5** — mở MT5 rồi bấm đúp `mt5_feed.bat` (`python mt5_feed.py XAUUSD`):
 cầu nối đọc nến XAUUSD từ MT5 (giờ đổi về UTC), dựng trang chart và tự mở
@@ -124,6 +125,10 @@ Bot2 chạy trong trình duyệt, sau đó lưu IndexedDB.
   mặc định, Pine `Dùng điều kiện độ dốc n2` tắt). Trend quay về rule cũ với `k=5`. Backtest
   MT5 XAUUSD 2025-01→2026-09: H1 +33.4R → +58.6R, M15 +24.6R → +78.3R; điều kiện này chỉ
   làm trend về SIDEWAY nhiều hơn và cắt lệnh Value Zone, không giúp đóng lệnh sớm hơn.
+- 2026-09-29 — Step 3 v1.9: **lọc tín hiệu theo trend khung lớn** — M15 lọc theo H1, H1 lọc
+  theo H4, kiểu lỏng (`higher_tf_filter="lenient"`: bỏ khi khung lớn ngược hướng, SIDEWAY vẫn
+  vào). Backtest MT5 XAUUSD: M15 +78.3R → +139.8R, H1 +58.6R → +74.6R. Áp dụng ở backtest
+  (`--higher`), bot MT5, chart live (15m/1h) và Pine.
 
 ---
 
@@ -221,9 +226,11 @@ ISO-8601 và `volume`.
 
 ```bash
 python -m trading_bot.backtest data.csv --trades-out trades.csv
+python -m trading_bot.backtest data/mt5/MetaQuotes-Demo_XAUUSD_M15.csv --higher data/mt5/MetaQuotes-Demo_XAUUSD_H1.csv
 ```
 
-Summary được in dạng JSON. Tham số `--trades-out` là tùy chọn.
+Summary được in dạng JSON. Tham số `--trades-out` là tùy chọn. `--higher` là CSV nến khung lớn
+để lọc lệnh theo trend (M15 dùng H1, H1 dùng H4); bỏ trống thì không lọc.
 
 ## Dùng trên TradingView
 
