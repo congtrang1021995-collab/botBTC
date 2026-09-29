@@ -26,6 +26,12 @@ const MT5_SYMBOLS = {XAUUSDT: 'XAUUSD'};
 const FEED = MT5_SYMBOLS[SYMBOL] && q.get('feed') !== 'binance' ? 'mt5' : 'binance';
 // Trang do chính mt5_feed.py phục vụ thì gọi cùng địa chỉ (không bị trình duyệt chặn).
 const MT5_URL = (q.get('mt5') || (location.port === '8770' ? location.origin : 'http://127.0.0.1:8770')).replace(/\/$/, '');
+// Trang công khai (GitHub Pages) bị trình duyệt chặn gọi 127.0.0.1 -> chuyển hẳn sang trang do
+// cầu nối phục vụ (điều hướng thì không bị chặn như fetch).
+if (FEED === 'mt5' && !q.get('mt5') && location.port !== '8770' && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
+  location.replace('http://127.0.0.1:8770/' + location.search);
+  return;
+}
 const START_PARAM = q.get('start');
 const VERSION = window.BOT2_VERSION || 'dev';
 const REST = FEED === 'mt5' ? MT5_URL + '/klines' : MARKET === 'futures' ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://api.binance.com/api/v3/klines';
