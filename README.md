@@ -63,6 +63,35 @@ Pyodide (3.13). Tham số URL tùy chọn:
 Binance (bị chặn ở Mỹ). Xem thử trên máy: `python web/build_site.py` rồi
 `python -m http.server 8766 --directory _site`.
 
+**MetaTrader 5 (đặt lệnh thật trên tài khoản đang đăng nhập)** — cần Windows, MT5 đang mở
+và `python -m pip install MetaTrader5 pandas`. Tải nến ra CSV (giờ đổi về UTC, chỉ nến đã
+đóng; nhớ đặt `Tools → Options → Charts → Max bars = Unlimited`):
+
+```bash
+python exness_mt5_fetch.py XAUUSD --tf H1 --start 2025-01-01
+```
+
+Bot tự giao dịch: bấm đúp `mt5_bot.bat` (XAUUSD, H1 + M15, 0.1 lot) hoặc chạy lệnh dưới.
+Nút **Algo Trading** trong MT5 phải bật. Mỗi nến đóng, engine Bot2 chạy giống backtest và
+lệnh MT5 đi theo engine: có lệnh chờ thì vào market ngay đầu nến kế tiếp kèm SL (1R tối
+thiểu) và TP 10R; sau đó SL/TP trên MT5 được đặt bằng hard stop / trailing / TP của engine;
+engine đóng lệnh (đảo chiều trend…) thì đóng market. Mỗi khung một magic number (H1=902060,
+M15=902015), không động vào lệnh đặt tay. Lệnh engine đã mở từ trước khi bật bot không được
+vào bù. Trạng thái và log ở `outputs/mt5_live/`; tắt bật lại vẫn nhận lại lệnh cũ.
+
+```bash
+python -m trading_bot.mt5 XAUUSD --tf H1 M15 --volume 0.1
+```
+
+`--check` làm nóng rồi kiểm tra lệnh thử bằng `order_check` (không gửi), `--dry-run` chạy
+liên tục nhưng chỉ in lệnh sẽ đặt.
+
+**Chart Vàng trên trang Pages dùng nến MT5** — `?symbol=XAUUSDT` lấy nến XAUUSD từ MT5 trên máy
+qua cầu nối `mt5_feed.bat` (`python mt5_feed.py XAUUSD`, http://127.0.0.1:8770, giờ đổi về UTC),
+giá chạy cập nhật mỗi giây. Mở MT5, chạy cầu nối rồi mở trang; Chrome hỏi quyền truy cập thiết
+bị trong mạng cục bộ thì chọn Cho phép. `&feed=binance` để dùng lại XAUUSDT Futures của Binance.
+Nến MT5 không có seed tính sẵn: lần đầu Bot2 chạy trong trình duyệt, sau đó lưu IndexedDB.
+
 **Điều kiện mới đã chốt**
 
 - 2026-09-24 — Step 1 v1.6: độ dốc EMA34 (OLS) trên 13 nến gần nhất phải cùng chiều

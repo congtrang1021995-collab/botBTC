@@ -12,5 +12,6 @@ build/
 # Kết quả chạy / dữ liệu tải về / trang dựng sẵn - không đưa lên GitHub
 outputs/
 data/binance/
+data/mt5/
 _site/
 .claude/

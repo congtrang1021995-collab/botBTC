@@ -5,7 +5,9 @@
 //   2. seed GitHub tính sẵn hằng ngày (web/build_seeds.py) — lịch sử dài, không phải chạy lại;
 //   3. không có cả hai (vd. ?start= sớm hơn seed): tải nến song song rồi chạy Bot2 từ đầu.
 // Sau đó chỉ tải nến mới đóng và Bot2 chỉ tính thêm các nến đó.
-// Tham số URL tùy chọn: ?interval=15m&start=2023-01-01&symbol=XAUUSDT&market=spot
+// Tham số URL tùy chọn: ?interval=15m&start=2023-01-01&symbol=XAUUSDT&market=spot&feed=binance
+// Vàng (XAUUSDT) mặc định lấy nến MT5 trên máy qua cầu nối mt5_feed.py (http://127.0.0.1:8770);
+// ?feed=binance để dùng lại XAUUSDT Futures của Binance.
 (function(){
 const q = new URLSearchParams(location.search);
 // Lịch sử mặc định khi KHÔNG có seed (chạy hoàn toàn trong trình duyệt nên giữ ngắn).
@@ -20,14 +22,23 @@ const TFS = {
 const ASSETS = {BTCUSDT: 'BTC', XAUUSDT: 'Vàng XAU'};
 const SYMBOL = (q.get('symbol') || 'BTCUSDT').toUpperCase();
 const MARKET = q.get('market') === 'spot' ? 'spot' : 'futures';
+const MT5_SYMBOLS = {XAUUSDT: 'XAUUSD'};
+const FEED = MT5_SYMBOLS[SYMBOL] && q.get('feed') !== 'binance' ? 'mt5' : 'binance';
+const MT5_URL = (q.get('mt5') || 'http://127.0.0.1:8770').replace(/\/$/, '');
 const START_PARAM = q.get('start');
 const VERSION = window.BOT2_VERSION || 'dev';
-const REST = MARKET === 'futures' ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://api.binance.com/api/v3/klines';
+const REST = FEED === 'mt5' ? MT5_URL + '/klines' : MARKET === 'futures' ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://api.binance.com/api/v3/klines';
 const PAGE = MARKET === 'futures' ? 1500 : 1000;
 // Futures: kline nằm ở /market/ws (đường /ws cũ kết nối được nhưng không gửi kline).
 const WS_BASE = MARKET === 'futures' ? 'wss://fstream.binance.com/market/ws/' : 'wss://stream.binance.com:9443/ws/';
-const SOURCE = `Binance ${MARKET === 'futures' ? 'Futures' : 'Spot'} (live)`;
-const SYM_LABEL = SYMBOL + (MARKET === 'futures' ? '.P' : '');
+let SOURCE = FEED === 'mt5' ? 'MT5 (live)' : `Binance ${MARKET === 'futures' ? 'Futures' : 'Spot'} (live)`;
+const SYM_LABEL = FEED === 'mt5' ? MT5_SYMBOLS[SYMBOL] + ' (MT5)' : SYMBOL + (MARKET === 'futures' ? '.P' : '');
+const FEED_NAME = FEED === 'mt5' ? 'MT5' : 'Binance';
+// Cầu nối MT5: hỏi tài khoản/mã để ghi nguồn; không kết nối được thì báo lỗi khi mở khung.
+const mt5Info = FEED === 'mt5'
+  ? fetch(MT5_URL + '/info', {cache: 'no-store'}).then(r => r.json()).then(i => {
+      SOURCE = `MT5 ${i.server} ${i.symbol} (live)`; return i; })
+  : Promise.resolve(null);
 
 const $ = id => document.getElementById(id);
 const fmt = v => v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -59,7 +70,7 @@ const store = (() => {
 })();
 
 // ---- seed GitHub (chỉ Futures, các mã trong web/build_seeds.py) ----
-const seedIndex = MARKET === 'futures'
+const seedIndex = MARKET === 'futures' && FEED === 'binance'
   ? fetch(`seed/index.json?v=${VERSION}`).then(r => r.ok ? r.json() : null)
       .then(ix => ix && ix.version === VERSION ? ix.seeds[SYMBOL] || null : null).catch(() => null)
   : Promise.resolve(null);
@@ -99,7 +110,7 @@ box.innerHTML = '<span class="dot" aria-hidden="true"></span><div><b id="lv-px">
 document.querySelector('header').appendChild(box);
 const overlay = document.createElement('div');
 overlay.className = 'boot';
-overlay.innerHTML = '<div><b id="boot-hd">Đang dựng chart live</b><span id="boot-st">Đang tải nến từ Binance…</span></div>';
+overlay.innerHTML = '<div><b id="boot-hd">Đang dựng chart live</b><span id="boot-st">Đang tải nến…</span></div>';
 document.querySelector('.chartbox').appendChild(overlay);
 const setStatus = (s, text) => { box.dataset.s = s; $('lv-st').textContent = text; };
 const setBoot = text => { const el = $('boot-st'); if (el) el.textContent = text; };
@@ -114,9 +125,9 @@ async function fetchClosed(tf, startMs, token){
     while (next < starts.length) {
       const i = next++;
       const r = await fetch(`${REST}?symbol=${SYMBOL}&interval=${tf}&startTime=${starts[i]}&limit=${PAGE}`);
-      if (!r.ok) throw new Error(`Binance ${r.status}: ${await r.text()}`);
+      if (!r.ok) throw new Error(`${FEED_NAME} ${r.status}: ${await r.text()}`);
       pages[i] = await r.json();
-      if (starts.length > 2) setBoot(`Đang tải nến từ Binance… ${Math.round(++done / starts.length * 100)}%`);
+      if (starts.length > 2) setBoot(`Đang tải nến từ ${FEED_NAME}… ${Math.round(++done / starts.length * 100)}%`);
     }
   };
   await Promise.all(Array.from({length: Math.min(6, starts.length)}, one));
@@ -188,7 +199,7 @@ async function show(tf){
   const token = ++loadToken;
   disconnect();
   const first = !TC;
-  const key = `${SYMBOL}|${MARKET}|${tf}`;
+  const key = FEED === 'mt5' ? `${SYMBOL}|mt5|${tf}` : `${SYMBOL}|${MARKET}|${tf}`;
   tfGroup.querySelectorAll('[data-tf]').forEach(b => b.setAttribute('aria-pressed', b.dataset.tf === tf));
   const tfEl = $('tf-label'); if (tfEl) tfEl.textContent = TFS[tf].name;
   document.title = `${SYM_LABEL} ${TFS[tf].name} Bot2 Live`;
@@ -198,6 +209,9 @@ async function show(tf){
   $('boot-hd').textContent = `Đang dựng chart live ${TFS[tf].name}`;
 
   try {
+    if (FEED === 'mt5') await mt5Info.catch(() => { throw new Error(
+      'không kết nối được MT5 trên máy (' + MT5_URL + '). Mở MT5 rồi chạy bot2/mt5_feed.bat; ' +
+      'Chrome hỏi quyền truy cập thiết bị trong mạng thì chọn Cho phép'); });
     const [saved, seeds] = await Promise.all([store.get(key), seedIndex]);
     if (token !== loadToken) return;
     const seed = seeds && seeds[tf];
@@ -224,10 +238,10 @@ async function show(tf){
     if (shown) connect(tf, token);   // giá chạy ngay, Bot2 bổ sung nến mới ở nền
 
     if (!shown) {   // không có bản lưu/seed phù hợp: chạy Bot2 từ đầu trong trình duyệt
-      showOverlay(true); setBoot('Đang tải nến từ Binance…');
+      showOverlay(true); setBoot(`Đang tải nến từ ${FEED_NAME}…`);
       const rows = await fetchClosed(tf, Date.parse(want + 'T00:00:00Z'), token);
       if (token !== loadToken) return;
-      if (!rows.length) throw new Error('Binance không trả về nến nào.');
+      if (!rows.length) throw new Error(`${FEED_NAME} không trả về nến nào.`);
       running = true;
       try {
         const m = await runBot(c, rows, setBoot);
@@ -253,7 +267,8 @@ async function show(tf){
     c.loading = false;
   } catch(e) {
     if (token !== loadToken) return;
-    setBoot('Lỗi: ' + e.message + ' — tải lại trang để thử lại. (Binance chặn truy cập từ một số quốc gia, ví dụ Mỹ.)');
+    setBoot('Lỗi: ' + e.message + ' — tải lại trang để thử lại.' +
+            (FEED === 'mt5' ? ' (Dùng giá Binance: thêm &feed=binance vào địa chỉ.)' : ' (Binance chặn truy cập từ một số quốc gia, ví dụ Mỹ.)'));
     showOverlay(true);
     setStatus('off', 'Không khởi động được');
   }
@@ -270,10 +285,11 @@ function onBar(b){
   $('lv-ch').innerHTML = `<span class="${ch>=0?'up':'dn'}">${ch>=0?'+':''}${ch.toFixed(2)}%</span>`;
   lastMsg = Date.now();
   const open = TC.openTrades().length;
-  document.title = `${fmt(b.close)} · ${SYMBOL} ${TFS[cur.tf].name}${open ? ` · ${open} lệnh mở` : ''}`;
+  document.title = `${fmt(b.close)} · ${FEED === 'mt5' ? MT5_SYMBOLS[SYMBOL] : SYMBOL} ${TFS[cur.tf].name}${open ? ` · ${open} lệnh mở` : ''}`;
 }
 function connect(tf, token){
   if (token !== loadToken) return;
+  if (FEED === 'mt5') { startPolling(tf, token); return; }
   try { ws = new WebSocket(`${WS_BASE}${SYMBOL.toLowerCase()}@kline_${tf}`); } catch(e) { startPolling(tf, token); return; }
   const sock = ws;
   sock.onopen = () => { lastMsg = Date.now(); syncClosed(); };
@@ -294,15 +310,18 @@ function connect(tf, token){
 function disconnect(){ stopPolling(); if (ws) { const s = ws; ws = null; try { s.close(); } catch(e) {} } }
 function startPolling(tf, token){
   if (pollTimer) return;
+  let barT = null;
   const run = async () => {
     try {
-      const k = (await (await fetch(`${REST}?symbol=${SYMBOL}&interval=${tf}&limit=1`)).json())[0];
+      const k = (await (await fetch(`${REST}?symbol=${SYMBOL}&interval=${tf}&limit=1`, {cache: 'no-store'})).json())[0];
       if (token !== loadToken) return;
       onBar({time: k[0]/1000, open: +k[1], high: +k[2], low: +k[3], close: +k[4]});
-      if (!running && !cur.loading) setStatus('poll', `REST 2s · ${clock()}`);
-    } catch(e) { setStatus('off', 'Mất kết nối Binance — đang thử lại'); }
+      if (barT !== null && k[0] !== barT) setTimeout(syncClosed, 500);
+      barT = k[0];
+      if (!running && !cur.loading) setStatus(FEED === 'mt5' ? 'on' : 'poll', `${FEED === 'mt5' ? 'MT5 1s' : 'REST 2s'} · ${clock()}`);
+    } catch(e) { setStatus('off', `Mất kết nối ${FEED_NAME} — đang thử lại`); }
   };
-  run(); pollTimer = setInterval(run, 2000);
+  run(); pollTimer = setInterval(run, FEED === 'mt5' ? 1000 : 2000);
 }
 function stopPolling(){ clearInterval(pollTimer); pollTimer = null; }
 
