@@ -36,8 +36,15 @@
 > Cập nhật 2026-09-28 — **Step 4**: **1R tối thiểu 10 giá** (`min_initial_risk = 10`). Khi
 > khớp lệnh mà giá khớp cách hard stop nhỏ hơn mốc thì nới stop ra đúng mốc; TP 10R và
 > trailing tính theo 1R mới. Khối lượng vẫn cố định, không đổi theo 1R (mục 25).
+>
+> Cập nhật 2026-09-29 — **Step 1 v1.8**: **bỏ điều kiện độ dốc EMA34 13 nến** (mặc định
+> `use_confirm_slope = false`, Pine input `Dùng điều kiện độ dốc n2` tắt). Trend quay về rule
+> cũ v1.5 với `k = 5`: duy trì chỉ cần `EMA34 >= EMA89` (mục 4.1, 8.1). Lý do: backtest MT5
+> XAUUSD 2025-01→2026-09 — ở bước xác nhận điều kiện không có tác dụng (điều kiện 8 nến đã bao
+> hàm), ở bước duy trì làm ~45% số nến thành `SIDEWAY` và cắt lệnh Value Zone. H1: +33.4R →
+> +58.6R; M15: +24.6R → +78.3R; thời gian giữ lệnh / đóng lệnh khi đảo chiều không chậm hơn.
 
-## Step 1–3 — Trend, Setup & Entry v1.7 (Bot 2)
+## Step 1–3 — Trend, Setup & Entry v1.8 (Bot 2)
 
 Tài liệu này là file đặc tả trung tâm của bot. Các bước tiếp theo sẽ được bổ sung tuần tự vào chính file này theo thứ tự:
 
@@ -78,6 +85,7 @@ SIDEWAY
 | `ema_fast_length` | 34 | Chu kỳ EMA nhanh |
 | `ema_slow_length` | 89 | Chu kỳ EMA chậm |
 | `n` | 8 | Số giá trị EMA34 dùng để đo slope và độ ổn định |
+| `use_confirm_slope` | false | **Bot 2 (v1.8).** Bật điều kiện độ dốc `n2` nến ở mục 4.1. Mặc định tắt từ 2026-09-29 |
 | `n2` (`confirm_slope_length`) | 13 | **Bot 2.** Số giá trị EMA34 gần nhất dùng đo độ dốc xác nhận bắt buộc (mục 4.1) |
 | `min_confirm_slope` | 0 | **Bot 2.** Mốc độ dốc tối thiểu của EMA34, đơn vị giá mỗi nến, cố định (không theo ATR). Mặc định `0` = chỉ xét dấu (chốt 2026-09-25); đặt > 0 để đòi dốc vượt mốc (mục 4.1) |
 | `k` | 5 | Số nến trái và phải dùng để xác nhận pivot (**Bot 2:** nâng từ 3 → 5 ngày 2026-09-25) |
@@ -132,7 +140,11 @@ slope = 0  → không xác nhận hướng
 
 V1 chỉ kiểm tra dấu của slope, chưa chuẩn hóa slope theo giá hoặc ATR và chưa đặt `min_slope`.
 
-### 4.1. Độ dốc xác nhận trên 13 nến (Bot 2, v1.6 → v1.7)
+### 4.1. Độ dốc xác nhận trên 13 nến (Bot 2, v1.6 → v1.7; **tắt mặc định từ v1.8**)
+
+> **v1.8 (2026-09-29):** điều kiện này **không còn áp dụng** mặc định
+> (`use_confirm_slope = false`): `Confirm_Slope_Up` và `Confirm_Slope_Down` luôn coi là thỏa,
+> nên mục 8.1–11 quay về rule cũ. Phần dưới giữ lại để tham chiếu khi bật lại input.
 
 Bot 2 tính thêm một độ dốc thứ hai bằng đúng công thức OLS ở trên nhưng trên `n2 = 13`
 giá trị EMA34 gần nhất (tính cả nến hiện tại):
@@ -250,7 +262,7 @@ EMA_Up_Maintenance_Filter = EMA34 >= EMA89
 EMA_Down_Maintenance_Filter = EMA34 <= EMA89
 ```
 
-Bot 2 (v1.6) bổ sung: trend đang giữ chỉ được duy trì khi **đồng thời** bộ lọc EMA ở trên
+Bot 2 (v1.6–v1.7, **tắt từ v1.8**) bổ sung: trend đang giữ chỉ được duy trì khi **đồng thời** bộ lọc EMA ở trên
 thỏa **và** `Confirm_Slope_Up` (uptrend) / `Confirm_Slope_Down` (downtrend) thỏa (mục 4.1).
 Độ dốc EMA34 trên 13 nến về 0 hoặc đổi chiều làm mất trend ngay tại nến đó, kể cả khi
 `EMA34` vẫn nằm đúng phía so với `EMA89`.

@@ -10,7 +10,12 @@ class StrategyConfig:
     ema_fast_length: int = 34
     ema_slow_length: int = 89
     slope_length: int = 8
-    # Bot 2 Step 1: số giá trị EMA34 gần nhất dùng xác nhận độ dốc bắt buộc.
+    # Bot 2 Step 1 (2026-09-29): BỎ điều kiện độ dốc EMA34 n2 nến (mặc định False).
+    # Ablation XAU MT5 H1/M15: ở bước xác nhận không có tác dụng (8 nến đã bao hàm),
+    # ở bước duy trì làm trend về SIDEWAY ~45% số nến và cắt lệnh Value Zone.
+    # True = bật lại (xác nhận + duy trì) như spec v1.7.
+    use_confirm_slope: bool = False
+    # Số giá trị EMA34 gần nhất dùng đo độ dốc xác nhận (chỉ khi use_confirm_slope).
     confirm_slope_length: int = 13
     # Bot 2 Step 1: mốc độ dốc tối thiểu của EMA34, đơn vị GIÁ mỗi nến, cố định
     # (không theo ATR). UPTREND cần Confirm_Slope > mốc, DOWNTREND cần < -mốc.

@@ -254,13 +254,15 @@ class ConfirmSlopeTests(unittest.TestCase):
     """Bot 2 Step 1: độ dốc EMA34 trên 13 nến gần nhất là điều kiện bắt buộc thêm vào rule cũ."""
 
     def setUp(self) -> None:
-        self.config = StrategyConfig(min_confirm_slope=0.0)
+        self.config = StrategyConfig(use_confirm_slope=True, min_confirm_slope=0.0)
 
     def test_default_confirm_window_is_thirteen_candles(self) -> None:
         self.assertEqual(StrategyConfig().confirm_slope_length, 13)
         self.assertEqual(StrategyConfig().slope_length, 8)
         self.assertAlmostEqual(StrategyConfig().min_confirm_slope, 0.0)
         self.assertEqual(StrategyConfig().pivot_legs, 5)
+        # 2026-09-29: điều kiện độ dốc 13 nến bị bỏ mặc định.
+        self.assertFalse(StrategyConfig().use_confirm_slope)
 
     def test_uptrend_confirmation_needs_positive_confirm_slope(self) -> None:
         # Toàn bộ rule cũ thỏa (EMA filter, ratio, HH/HL) nhưng slope 13 nến không dương.
@@ -358,7 +360,7 @@ class ConfirmSlopeTests(unittest.TestCase):
 
     def test_small_confirm_slope_is_sideway_when_threshold_enabled(self) -> None:
         # Mốc cố định 0.2 giá/nến -> cần |slope| > 0.2 mỗi nến (ATR không liên quan).
-        config = StrategyConfig(min_confirm_slope=0.2)
+        config = StrategyConfig(use_confirm_slope=True, min_confirm_slope=0.2)
 
         weak = evaluate_trend(
             make_context(close=105.0, confirm_slope=0.15, atr=2.0),
@@ -386,7 +388,7 @@ class ConfirmSlopeTests(unittest.TestCase):
         self.assertEqual(exact.trend, TrendState.SIDEWAY)
 
     def test_threshold_is_symmetric_for_downtrend(self) -> None:
-        config = StrategyConfig(min_confirm_slope=0.2)
+        config = StrategyConfig(use_confirm_slope=True, min_confirm_slope=0.2)
         base = dict(
             close=95.0,
             ema_fast=100.0,
@@ -406,7 +408,7 @@ class ConfirmSlopeTests(unittest.TestCase):
         self.assertEqual(strong.trend, TrendState.DOWNTREND)
 
     def test_held_trend_drops_to_sideway_when_slope_flattens_below_threshold(self) -> None:
-        config = StrategyConfig(min_confirm_slope=0.2)
+        config = StrategyConfig(use_confirm_slope=True, min_confirm_slope=0.2)
         previous = StrategyState(trend=TrendState.UPTREND, protected_swing_low=95.0)
         decision = evaluate_trend(
             make_context(close=104.0, ema_fast=100.0, ema_slow=99.0, confirm_slope=0.1, atr=2.0),
@@ -418,7 +420,7 @@ class ConfirmSlopeTests(unittest.TestCase):
 
     def test_threshold_does_not_depend_on_atr(self) -> None:
         # Mốc cố định theo giá/nến: không cần ATR, ATR = None vẫn xác nhận được trend.
-        with_threshold = StrategyConfig(min_confirm_slope=0.2)
+        with_threshold = StrategyConfig(use_confirm_slope=True, min_confirm_slope=0.2)
         decision = evaluate_trend(
             make_context(close=105.0, confirm_slope=5.0, atr=None), StrategyState(), with_threshold
         )
@@ -429,7 +431,7 @@ class ConfirmSlopeTests(unittest.TestCase):
         )
         self.assertEqual(decision.trend, TrendState.SIDEWAY)
 
-        sign_only = StrategyConfig(min_confirm_slope=0.0)
+        sign_only = StrategyConfig(use_confirm_slope=True, min_confirm_slope=0.0)
         decision = evaluate_trend(
             make_context(close=105.0, confirm_slope=0.01, atr=None), StrategyState(), sign_only
         )
@@ -437,7 +439,7 @@ class ConfirmSlopeTests(unittest.TestCase):
         self.assertEqual(decision.trend, TrendState.UPTREND)
 
     def test_confirm_slope_applies_even_when_maintenance_filter_disabled(self) -> None:
-        config = StrategyConfig(
+        config = StrategyConfig(use_confirm_slope=True,
             require_trend_maintenance_filter=False, min_confirm_slope=0.0
         )
         previous = StrategyState(trend=TrendState.UPTREND, protected_swing_low=95.0)
@@ -447,6 +449,33 @@ class ConfirmSlopeTests(unittest.TestCase):
         decision = evaluate_trend(context, previous, config)
         self.assertTrue(decision.ema_up_maintain)
         self.assertEqual(decision.trend, TrendState.SIDEWAY)
+
+
+class ConfirmSlopeDisabledTests(unittest.TestCase):
+    """2026-09-29: mặc định bỏ điều kiện độ dốc 13 nến — trend theo rule cũ."""
+
+    def test_uptrend_confirmed_regardless_of_confirm_slope(self) -> None:
+        for confirm_slope in (0.0, -0.3, None):
+            context = make_context(close=105.0, confirm_slope=confirm_slope)
+            decision = evaluate_trend(context, StrategyState(), StrategyConfig())
+            self.assertTrue(decision.slope_confirm_up)
+            self.assertEqual(decision.trend, TrendState.UPTREND, confirm_slope)
+
+    def test_held_uptrend_survives_negative_confirm_slope(self) -> None:
+        previous = StrategyState(trend=TrendState.UPTREND, protected_swing_low=95.0)
+        context = make_context(
+            close=98.0, ema_fast=100.0, ema_slow=99.0, confirm_slope=-0.5
+        )
+        decision = evaluate_trend(context, previous, StrategyConfig())
+        self.assertEqual(decision.trend, TrendState.UPTREND)
+
+    def test_held_downtrend_survives_positive_confirm_slope(self) -> None:
+        previous = StrategyState(trend=TrendState.DOWNTREND, protected_swing_high=105.0)
+        context = make_context(
+            close=102.0, ema_fast=100.0, ema_slow=101.0, slope=-1.0, confirm_slope=0.5
+        )
+        decision = evaluate_trend(context, previous, StrategyConfig())
+        self.assertEqual(decision.trend, TrendState.DOWNTREND)
 
 
 if __name__ == "__main__":

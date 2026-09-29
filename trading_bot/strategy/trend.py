@@ -113,10 +113,11 @@ def evaluate_trend(
     # ATR); dốc quá ít vẫn là SIDEWAY. min_confirm_slope = 0 -> chỉ xét dấu.
     confirm_slope = indicators.ema_confirm_slope
     threshold: float | None = config.min_confirm_slope
-    slope_confirm_up = (
+    # 2026-09-29: mặc định bỏ điều kiện này (use_confirm_slope=False) -> luôn thỏa.
+    slope_confirm_up = not config.use_confirm_slope or (
         confirm_slope is not None and threshold is not None and confirm_slope > threshold
     )
-    slope_confirm_down = (
+    slope_confirm_down = not config.use_confirm_slope or (
         confirm_slope is not None and threshold is not None and confirm_slope < -threshold
     )
 

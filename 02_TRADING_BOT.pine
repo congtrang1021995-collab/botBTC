@@ -15,8 +15,10 @@
 // (không vào muộn khi slot trống); cần setup Value Zone mới.
 // Bot 2 (2026-09-28): 1R tối thiểu 10 giá — khi khớp lệnh mà giá khớp cách hard stop < mốc
 // thì nới stop ra đủ mốc; TP 10R và trailing tính theo 1R mới. Input "1R tối thiểu", 0 = tắt.
+// Bot 2 Step 1 (2026-09-29, v3.11): BỎ điều kiện độ dốc EMA34 13 nến (input "Dùng điều kiện
+// độ dốc n2" mặc định tắt). Trend quay về rule cũ: duy trì chỉ cần EMA34 >= EMA89.
 strategy(
-     title = "Investment System Bot 2 — Steps 1–7 v3.10 (slope 13 nến cùng dấu, k=5, 1 lệnh/setup, 1R tối thiểu 10, exit khi đảo chiều trend)",
+     title = "Investment System Bot 2 — Steps 1–7 v3.11 (bỏ slope 13 nến, k=5, 1 lệnh/setup, 1R tối thiểu 10, exit khi đảo chiều trend)",
      shorttitle = "ISBot2",
      overlay = true,
      pyramiding = 100,
@@ -38,6 +40,7 @@ string GROUP_VIEW = "Hiển thị"
 int emaFastLength = input.int(34, "EMA nhanh", minval = 1, group = GROUP_TREND)
 int emaSlowLength = input.int(89, "EMA chậm", minval = 2, group = GROUP_TREND)
 int slopeLength = input.int(8, "n — số nến đo slope/độ ổn định", minval = 2, maxval = 500, group = GROUP_TREND)
+bool useConfirmSlope = input.bool(false, "Dùng điều kiện độ dốc n2 (Bot 2)", tooltip = "2026-09-29: mặc định TẮT. Bật để áp lại điều kiện độ dốc EMA34 trên n2 nến cho cả xác nhận lẫn duy trì trend (spec v1.7).", group = GROUP_TREND)
 int confirmSlopeLength = input.int(13, "n2 — số nến xác nhận độ dốc EMA34 (Bot 2)", minval = 2, maxval = 500, tooltip = "Điều kiện bắt buộc thêm vào rule cũ: hệ số hồi quy tuyến tính của EMA34 trên n2 nến gần nhất phải > ngưỡng khi UPTREND và < -ngưỡng khi DOWNTREND, cả lúc xác nhận trend mới lẫn lúc duy trì trend. Không thỏa thì trend = SIDEWAY.", group = GROUP_TREND)
 float minConfirmSlope = input.float(0.0, "Độ dốc tối thiểu (giá mỗi nến, Bot 2)", minval = 0.0, step = 0.5, tooltip = "Mốc cố định theo đơn vị giá/nến, không theo ATR. UPTREND cần độ dốc EMA34 > mốc, DOWNTREND cần < -mốc. Mặc định 0 (chốt 2026-09-25) = chỉ xét dấu: dốc dương -> có thể UPTREND, dốc âm -> có thể DOWNTREND, bằng 0 -> SIDEWAY.", group = GROUP_TREND)
 int pivotLegs = input.int(5, "k — số nến mỗi bên của pivot", minval = 1, maxval = 100, tooltip = "Bot 2 (2026-09-25): nâng từ 3 lên 5 nến. Pivot xác nhận trễ k nến.", group = GROUP_TREND)
@@ -407,8 +410,8 @@ if processClosedBar
     // áp cho cả xác nhận trend mới và duy trì trend đang giữ; không thỏa thì SIDEWAY.
     // Mốc cố định theo giá/nến (không theo ATR): dốc quá ít vẫn là SIDEWAY. minConfirmSlope = 0 -> chỉ xét dấu.
     float confirmSlopeThreshold = minConfirmSlope
-    bool slopeConfirmUp = not na(emaFastConfirmSlope) and not na(confirmSlopeThreshold) and emaFastConfirmSlope > confirmSlopeThreshold
-    bool slopeConfirmDown = not na(emaFastConfirmSlope) and not na(confirmSlopeThreshold) and emaFastConfirmSlope < -confirmSlopeThreshold
+    bool slopeConfirmUp = not useConfirmSlope or (not na(emaFastConfirmSlope) and not na(confirmSlopeThreshold) and emaFastConfirmSlope > confirmSlopeThreshold)
+    bool slopeConfirmDown = not useConfirmSlope or (not na(emaFastConfirmSlope) and not na(confirmSlopeThreshold) and emaFastConfirmSlope < -confirmSlopeThreshold)
     bool validUpStructure = higherHigh and higherLow and close >= lastSwingLow
     bool validDownStructure = lowerHigh and lowerLow and close <= lastSwingHigh
     bool previousUptrendIntact = trendState == TREND_UP and not na(protectedSwingLow) and close >= protectedSwingLow
@@ -675,7 +678,7 @@ if barstate.islast and dashboardMode == "Full"
     table.cell(dashboard, 0, 13, "Add / pyramiding")
     table.cell(dashboard, 1, 13, maxTradesPerSetup > 0 ? "MAX " + str.tostring(maxTradesPerSetup) + "/SETUP · " + str.tostring(strategy.opentrades) + " OPEN" : "MULTI-ENTRY")
     table.cell(dashboard, 0, 14, "Trend guard")
-    table.cell(dashboard, 1, 14, (requireTrendMaintenanceFilter ? "EMA34/EMA89" : "OFF") + " + slope" + str.tostring(confirmSlopeLength) + (minConfirmSlope > 0.0 ? " >" + str.tostring(minConfirmSlope, "#.##") : "") + (exitOnTrendLoss ? " + exit" : exitOnTrendReversal ? " + rev" : ""))
+    table.cell(dashboard, 1, 14, (requireTrendMaintenanceFilter ? "EMA34/EMA89" : "OFF") + (useConfirmSlope ? " + slope" + str.tostring(confirmSlopeLength) + (minConfirmSlope > 0.0 ? " >" + str.tostring(minConfirmSlope, "#.##") : "") : "") + (exitOnTrendLoss ? " + exit" : exitOnTrendReversal ? " + rev" : ""))
 else if barstate.islast and dashboardMode == "Lite"
     string currentSetup = f_setup_text(valueZoneLongSetup, valueZoneShortSetup, breakoutLongSetup, breakoutShortSetup)
     string positionText = strategy.position_size > 0 ? "LONG × " + str.tostring(strategy.opentrades) : strategy.position_size < 0 ? "SHORT × " + str.tostring(strategy.opentrades) : "FLAT"

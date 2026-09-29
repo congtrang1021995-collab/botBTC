@@ -120,6 +120,10 @@ Bot2 chạy trong trình duyệt, sau đó lưu IndexedDB.
 - 2026-09-28 — Step 4: **1R tối thiểu 10 giá** (`min_initial_risk=10`, Pine `1R tối thiểu`).
   Giá khớp cách hard stop dưới 10 thì nới stop ra đúng 10; TP 10R và trailing theo 1R mới.
   Khối lượng vẫn cố định (không đổi theo 1R). Đặt `0` để tắt.
+- 2026-09-29 — Step 1 v1.8: **bỏ điều kiện độ dốc EMA34 13 nến** (`use_confirm_slope=False`
+  mặc định, Pine `Dùng điều kiện độ dốc n2` tắt). Trend quay về rule cũ với `k=5`. Backtest
+  MT5 XAUUSD 2025-01→2026-09: H1 +33.4R → +58.6R, M15 +24.6R → +78.3R; điều kiện này chỉ
+  làm trend về SIDEWAY nhiều hơn và cắt lệnh Value Zone, không giúp đóng lệnh sớm hơn.
 
 ---
 
@@ -134,7 +138,7 @@ trực quan trên TradingView.
 - Step 1 — Trend: đã triển khai, kèm bộ lọc duy trì trend (spec mục 8.1). Uptrend
   chỉ mất khi `EMA34 < EMA89`, downtrend chỉ mất khi `EMA34 > EMA89`; hai EMA bằng
   nhau chưa làm mất trend và Close phá Protected Swing tạm thời không làm đổi trend.
-  **Bot 2 (v1.6):** thêm điều kiện bắt buộc độ dốc EMA34 trên 13 nến gần nhất
+  **Bot 2 (v1.6–v1.7, tắt mặc định từ v1.8 — `use_confirm_slope=False`):** điều kiện độ dốc EMA34 trên 13 nến gần nhất
   (`confirm_slope_length=13`) phải cùng chiều trend ở cả xác nhận và duy trì; dốc bằng 0
   hoặc ngược chiều thì `SIDEWAY`. Mốc `min_confirm_slope` mặc định 0 (chỉ xét dấu), đặt > 0
   để đòi dốc vượt mốc. Pivot dùng `pivot_legs=5`. Điều kiện này không tắt được bằng
