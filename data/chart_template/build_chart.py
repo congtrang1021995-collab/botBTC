@@ -6,6 +6,7 @@ thành một trang HTML độc lập.
     python data/chart_template/build_chart.py "Dữ liệu/XAU" --symbol XAU/USD --tf H1
     python data/chart_template/build_chart.py outputs/xau_combined_2025-01_to_2026-09.csv --symbol XAU/USD
     python data/chart_template/build_chart.py "Dữ liệu/BTC" --symbol BTC/USD --out outputs/btc-trade-explorer.html
+    python data/chart_template/build_chart.py data/mt5/MetaQuotes-Demo_XAUUSD_M15.csv --symbol XAU/USD --tf M15         --higher data/mt5/MetaQuotes-Demo_XAUUSD_H1.csv      # lọc lệnh theo trend khung lớn (Bot 2)
 
 Đầu vào là một hoặc nhiều file CSV, hoặc thư mục (lấy mọi *.csv, xếp theo tên).
 Cột đầu tiên phải là thời gian ISO-8601 nếu không có cột `timestamp/time/date`.
@@ -17,7 +18,7 @@ import argparse
 import csv
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -25,6 +26,7 @@ WORKSPACE = HERE.parents[1]
 sys.path.insert(0, str(WORKSPACE))
 
 from trading_bot.backtest.csv_loader import load_bars_csv  # noqa: E402
+from trading_bot.core.higher_tf import infer_minutes  # noqa: E402
 from trading_bot.core.models import Bar  # noqa: E402
 
 sys.path.insert(0, str(HERE))
@@ -62,10 +64,26 @@ def load_bars(files: list[Path]) -> list[Bar]:
     return bars
 
 
-def build_payload(bars: list[Bar]) -> dict:
-    """Chạy Bot2 trên toàn bộ nến và trả dữ liệu chart (xem incremental.IncrementalChart)."""
-    chart = IncrementalChart()
+def build_payload(bars: list[Bar], higher: list[Bar] | None = None) -> dict:
+    """Chạy Bot2 trên toàn bộ nến và trả dữ liệu chart (xem incremental.IncrementalChart).
+
+    ``higher``: nến khung lớn để lọc lệnh theo trend (Bot 2), đưa vào trước mỗi nến khung nhỏ
+    những nến khung lớn đã đóng tới lúc nến đó đóng.
+    """
+    if not higher:
+        chart = IncrementalChart()
+        for bar in bars:
+            chart.add(bar)
+        return chart.payload()
+    minutes, higher_minutes = infer_minutes(bars), infer_minutes(higher)
+    chart = IncrementalChart(minutes=minutes, higher_minutes=higher_minutes)
+    step, higher_step = timedelta(minutes=minutes), timedelta(minutes=higher_minutes)
+    h = 0
     for bar in bars:
+        while h < len(higher) and higher[h].timestamp + higher_step <= bar.timestamp + step:
+            hb = higher[h]
+            chart.add_higher(hb.timestamp, hb.open, hb.high, hb.low, hb.close)
+            h += 1
         chart.add(bar)
     return chart.payload()
 
@@ -76,6 +94,8 @@ def main() -> None:
     parser.add_argument("--symbol", required=True, help="Tên mã hiển thị, ví dụ XAU/USD.")
     parser.add_argument("--tf", default="H1", help="Khung thời gian hiển thị (mặc định H1).")
     parser.add_argument("--out", type=Path, help="File HTML đầu ra.")
+    parser.add_argument("--higher", nargs="+", type=Path,
+                        help="CSV/thư mục nến khung lớn để lọc lệnh theo trend (M15 <- H1, H1 <- H4).")
     parser.add_argument("--source", default="giá BID", help="Nhãn nguồn giá hiển thị, ví dụ \"Binance Futures\".")
     args = parser.parse_args()
 
@@ -85,7 +105,8 @@ def main() -> None:
     slug = args.symbol.split("/")[0].lower()
     out = args.out or WORKSPACE / "outputs" / f"{slug}-{args.tf.lower()}-trade-explorer.html"
 
-    payload = build_payload(bars)
+    higher = load_bars(csv_files(args.higher)) if args.higher else None
+    payload = build_payload(bars, higher)
     payload["src"] = args.source
     html = (TEMPLATE.read_text(encoding="utf-8")
             .replace("__TITLE__", f"{args.symbol.split('/')[0]} {args.tf} Bot2 Trade Explorer")
