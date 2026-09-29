@@ -51,7 +51,11 @@ const $ = id => document.getElementById(id);
 const fmt = v => v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const clock = () => new Date().toLocaleTimeString('vi-VN',{hour12:false});
 const fmtDate = s => s.split('-').reverse().join('/');
-const fallbackStart = tf => TFS[tf].start || new Date(Date.now() - TFS[tf].days * 864e5).toISOString().slice(0, 10);
+// Nến MT5 lấy từ máy nên nhanh: lịch sử dài hơn (MT5 demo có nến từ 01/2025, M5 từ 04/2025).
+const MT5_START = {'5m': 180, '15m': '2025-01-01', '1h': '2025-01-01', '4h': '2020-01-01', '1d': '2020-01-01'};
+const fallbackStart = tf => FEED === 'mt5'
+  ? (typeof MT5_START[tf] === 'number' ? new Date(Date.now() - MT5_START[tf] * 864e5).toISOString().slice(0, 10) : MT5_START[tf])
+  : TFS[tf].start || new Date(Date.now() - TFS[tf].days * 864e5).toISOString().slice(0, 10);
 
 // ---- lưu trữ trong trình duyệt (IndexedDB) — lỗi/không có thì chạy như bình thường ----
 // Đổi cấu trúc thì đổi TÊN cơ sở dữ liệu (không nâng version): nâng version bị chặn mãi nếu
