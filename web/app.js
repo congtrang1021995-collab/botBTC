@@ -24,7 +24,8 @@ const SYMBOL = (q.get('symbol') || 'BTCUSDT').toUpperCase();
 const MARKET = q.get('market') === 'spot' ? 'spot' : 'futures';
 const MT5_SYMBOLS = {XAUUSDT: 'XAUUSD'};
 const FEED = MT5_SYMBOLS[SYMBOL] && q.get('feed') !== 'binance' ? 'mt5' : 'binance';
-const MT5_URL = (q.get('mt5') || 'http://127.0.0.1:8770').replace(/\/$/, '');
+// Trang do chính mt5_feed.py phục vụ thì gọi cùng địa chỉ (không bị trình duyệt chặn).
+const MT5_URL = (q.get('mt5') || (location.port === '8770' ? location.origin : 'http://127.0.0.1:8770')).replace(/\/$/, '');
 const START_PARAM = q.get('start');
 const VERSION = window.BOT2_VERSION || 'dev';
 const REST = FEED === 'mt5' ? MT5_URL + '/klines' : MARKET === 'futures' ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://api.binance.com/api/v3/klines';
@@ -210,8 +211,8 @@ async function show(tf){
 
   try {
     if (FEED === 'mt5') await mt5Info.catch(() => { throw new Error(
-      'không kết nối được MT5 trên máy (' + MT5_URL + '). Mở MT5 rồi chạy bot2/mt5_feed.bat; ' +
-      'Chrome hỏi quyền truy cập thiết bị trong mạng thì chọn Cho phép'); });
+      'không kết nối được MT5 trên máy (' + MT5_URL + '). Mở MT5, chạy bot2/mt5_feed.bat rồi ' +
+      'mở chart tại http://127.0.0.1:8770/?symbol=XAUUSDT&interval=15m'); });
     const [saved, seeds] = await Promise.all([store.get(key), seedIndex]);
     if (token !== loadToken) return;
     const seed = seeds && seeds[tf];

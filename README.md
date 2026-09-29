@@ -86,11 +86,13 @@ python -m trading_bot.mt5 XAUUSD --tf H1 M15 --volume 0.1
 `--check` làm nóng rồi kiểm tra lệnh thử bằng `order_check` (không gửi), `--dry-run` chạy
 liên tục nhưng chỉ in lệnh sẽ đặt.
 
-**Chart Vàng trên trang Pages dùng nến MT5** — `?symbol=XAUUSDT` lấy nến XAUUSD từ MT5 trên máy
-qua cầu nối `mt5_feed.bat` (`python mt5_feed.py XAUUSD`, http://127.0.0.1:8770, giờ đổi về UTC),
-giá chạy cập nhật mỗi giây. Mở MT5, chạy cầu nối rồi mở trang; Chrome hỏi quyền truy cập thiết
-bị trong mạng cục bộ thì chọn Cho phép. `&feed=binance` để dùng lại XAUUSDT Futures của Binance.
-Nến MT5 không có seed tính sẵn: lần đầu Bot2 chạy trong trình duyệt, sau đó lưu IndexedDB.
+**Chart Vàng dùng nến MT5** — mở MT5 rồi bấm đúp `mt5_feed.bat` (`python mt5_feed.py XAUUSD`):
+cầu nối đọc nến XAUUSD từ MT5 (giờ đổi về UTC), dựng trang chart và tự mở
+http://127.0.0.1:8770/?symbol=XAUUSDT&interval=15m; giá cập nhật mỗi giây. Để cửa sổ đó mở là
+xem được, không cần bật lại mỗi lần tải trang. Trang GitHub Pages `?symbol=XAUUSDT` cũng gọi cầu
+nối này nhưng nhiều trình duyệt chặn trang công khai gọi vào 127.0.0.1, nên dùng địa chỉ local.
+`&feed=binance` để dùng lại XAUUSDT Futures của Binance. Nến MT5 không có seed tính sẵn: lần đầu
+Bot2 chạy trong trình duyệt, sau đó lưu IndexedDB.
 
 **Điều kiện mới đã chốt**
 
