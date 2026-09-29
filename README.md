@@ -1,18 +1,18 @@
 # Investment System Bot 2 (bot mới, rule đang xây)
 
-Thư mục này là bản sao độc lập của bot gốc tại thời điểm 2026-09-24 (spec v1.5,
-Pine v3.2), dùng làm nền để xây bộ rule mới. Bot gốc ở thư mục cha đã khóa rule và
-chỉ dùng để đối chiếu. Bot 2 giữ toàn bộ rule cũ và bổ sung từng điều kiện mới.
+Đây là bot duy nhất của dự án. Bot 2 xuất phát từ bản sao của bot gốc ngày 2026-09-24
+(spec v1.5, Pine v3.2); bot gốc đã được xóa ngày 2026-09-29. Các chỗ ghi "bot gốc" trong
+tài liệu chỉ mô tả rule cũ để so sánh.
 
-Mọi lệnh bên dưới chạy từ trong thư mục `bot2/`. Dữ liệu giá dùng chung với bot gốc
-ở `../Dữ liệu/`, ví dụ:
+Mọi lệnh bên dưới chạy từ trong thư mục `bot2/`. Dữ liệu giá tải thủ công nằm ở
+`Dữ liệu/` (chỉ trên máy, không đưa lên GitHub), ví dụ:
 
 ```bash
-python -m trading_bot.backtest "../Dữ liệu/XAU/XAU-USD_1Hour_BID_2025-01-01_to_2025-01-31_Etc_UTC.csv"
+python -m trading_bot.backtest "Dữ liệu/XAU/XAU-USD_1Hour_BID_2025-01-01_to_2025-01-31_Etc_UTC.csv"
 ```
 
 ```bash
-python data/chart_template/build_chart.py "../Dữ liệu/XAU" --symbol XAU/USD --tf H1
+python data/chart_template/build_chart.py "Dữ liệu/XAU" --symbol XAU/USD --tf H1
 ```
 
 **Dữ liệu Binance thực tế** (API public, không cần key; mặc định BTCUSDT H1 Spot,
