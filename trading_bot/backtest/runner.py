@@ -10,7 +10,7 @@ from trading_bot.backtest.metrics import (
     calculate_trade_metrics,
     extract_closed_trades,
 )
-from trading_bot.config import StrategyConfig
+from trading_bot.config import StrategyConfig, config_for_timeframe
 from trading_bot.core.engine import ProcessResult, TradingEngine
 from trading_bot.core.higher_tf import HigherTrendFeed, infer_minutes
 from trading_bot.core.models import Bar
@@ -32,14 +32,18 @@ def run_backtest(
 
     ``higher_bars``: nến khung lớn (Bot 2, lọc theo trend khung lớn đã đóng).
     """
-    engine = TradingEngine(config)
+    bars = list(bars)
+    try:
+        minutes = infer_minutes(bars)
+    except ValueError:  # nến không có thời gian (test) -> không gắn tham số theo khung
+        minutes = None
+    engine = TradingEngine(config_for_timeframe(config, minutes))
     if not higher_bars:
         return [engine.process_bar(bar) for bar in bars]
-    bars = list(bars)
     feed = HigherTrendFeed(infer_minutes(higher_bars), config)
     for hb in higher_bars:
         feed.add(hb.timestamp, hb.open, hb.high, hb.low, hb.close)
-    step = timedelta(minutes=infer_minutes(bars))
+    step = timedelta(minutes=minutes)
     return [engine.process_bar(bar, feed.trend_at(bar.timestamp + step)) for bar in bars]
 
 

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from trading_bot.config import StrategyConfig
+from trading_bot.config import StrategyConfig, config_for_timeframe
 from trading_bot.core.engine import ProcessResult, TradingEngine
 from trading_bot.data.binance import (
     INTERVAL_MS,
@@ -37,7 +37,9 @@ class LiveMonitor:
     def __post_init__(self) -> None:
         if self.interval not in INTERVAL_MS:
             raise ValueError(f"interval không hỗ trợ: {self.interval}")
-        self.engine = TradingEngine(self.config)
+        self.engine = TradingEngine(
+            config_for_timeframe(self.config, INTERVAL_MS[self.interval] // 60_000)
+        )
 
     def warm_up(self) -> list[ProcessResult]:
         """Nạp ``warmup_bars`` nến đã đóng gần nhất để EMA/pivot/trend ổn định."""

@@ -14,7 +14,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 
 from trading_bot.backtest.metrics import ClosedTradeTracker, calculate_trade_metrics
-from trading_bot.config import StrategyConfig
+from trading_bot.config import StrategyConfig, config_for_timeframe
 from trading_bot.core.engine import TradingEngine
 from trading_bot.core.higher_tf import HigherTrendFeed
 from trading_bot.core.models import Bar, PositionSide
@@ -31,7 +31,7 @@ class IncrementalChart:
         minutes: int | None = None,
         higher_minutes: int | None = None,
     ) -> None:
-        self.engine = TradingEngine(config)
+        self.engine = TradingEngine(config_for_timeframe(config, minutes))
         # Lọc theo trend khung lớn: cần biết độ dài nến khung nhỏ để tính giờ đóng nến.
         self.higher = HigherTrendFeed(higher_minutes, config) if higher_minutes and minutes else None
         self.step = timedelta(minutes=minutes) if minutes else None

@@ -28,7 +28,9 @@ if not mt5.initialize():
 acc = mt5.account_info()
 print("Tài khoản:", acc.login, acc.server)
 
-symbol = args.symbol or [s.name for s in mt5.symbols_get("XAUUSD*")][0]
+from trading_bot.mt5.broker import resolve_symbol  # noqa: E402
+
+symbol = resolve_symbol(mt5, args.symbol or "XAUUSD")  # Exness: XAUUSD -> XAUUSDm
 mt5.symbol_select(symbol, True)
 
 start = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)

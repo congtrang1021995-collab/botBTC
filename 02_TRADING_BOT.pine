@@ -20,7 +20,7 @@
 // Bot 2 Step 3 (2026-09-29, v3.12): lọc tín hiệu theo trend khung lớn — chart M15 lọc theo H1,
 // chart H1 lọc theo H4 (nến khung lớn đã đóng). "Lỏng" = chặn khi khung lớn ngược hướng.
 strategy(
-     title = "Investment System Bot 2 — Steps 1–7 v3.12 (bỏ slope 13 nến, lọc trend M15<-H1/H1<-H4, k=5, 1 lệnh/setup, 1R tối thiểu 10, exit khi đảo chiều trend)",
+     title = "Investment System Bot 2 — Steps 1–7 v3.12 (bỏ slope 13 nến, lọc trend M15<-H1/H1<-H4, k=5, 1 lệnh/setup, 1R tối thiểu 10 (M15: max(10, 4×ATR)), exit khi đảo chiều trend)",
      shorttitle = "ISBot2",
      overlay = true,
      pyramiding = 100,
@@ -58,6 +58,7 @@ int maxTradesPerSetup = input.int(1, "Số lệnh mở tối đa mỗi loại se
 int atrLength = input.int(13, "ATR Length", minval = 1, group = GROUP_RISK)
 float stopAtrMultiplier = input.float(0.30, "Stop ATR Multiplier", minval = 0.0, step = 0.01, group = GROUP_RISK)
 float minInitialRisk = input.float(10.0, "1R tối thiểu (giá, Bot 2)", minval = 0.0, step = 1.0, tooltip = "Khoảng cách tối thiểu từ giá khớp tới hard stop, đơn vị giá. Stop hẹp hơn thì nới ra đúng mốc (Long: giá khớp - mốc, Short: giá khớp + mốc); TP và trailing tính theo 1R mới. Stop đã bị giá khớp vượt qua thì giữ nguyên. 0 = tắt.", group = GROUP_RISK)
+float minInitialRiskAtr = input.float(4.0, "1R tối thiểu theo ATR (hệ số, Bot 2)", minval = 0.0, step = 0.5, tooltip = "2026-09-29: CHỈ áp trên chart 15 phút — mốc 1R tối thiểu = max(1R tối thiểu giá, hệ số × ATR của nến tín hiệu đã đóng trước lúc khớp). Backtest XAU M15 4 năm: 4×ATR giữ lãi ~ như mốc 10 cố định, PF và max DD tốt hơn; trên H1 mọi hệ số đều kém nên khung khác chỉ dùng mốc giá. 0 = tắt.", group = GROUP_RISK)
 string riskModel = input.string("Khối lượng cố định", "Mô hình khối lượng", options = ["Khối lượng cố định", "Rủi ro % vốn"], group = GROUP_RISK)
 float fixedPositionSize = input.float(1.0, "Khối lượng cố định", minval = 0.000001, step = 1.0, group = GROUP_RISK)
 float riskPerTradePercent = input.float(1.0, "Rủi ro mỗi lệnh (% vốn)", minval = 0.01, maxval = 100.0, step = 0.1, tooltip = "Chỉ dùng khi chọn mô hình Rủi ro % vốn. Pine ước tính quantity từ Close nến xác nhận vì chưa biết trước Open nến kế tiếp; Python dùng Open thực tế.", group = GROUP_RISK)
@@ -273,12 +274,14 @@ if pendingOrderSide != ENTRY_NONE and str.length(pendingEntryId) > 0 and strateg
             break
 
 if pendingOrderFilled
-    // Bot 2: 1R tối thiểu tính từ giá khớp thực tế.
-    if minInitialRisk > 0.0
-        if pendingOrderSide == ENTRY_LONG and pendingHardStop < pendingFillPrice and pendingFillPrice - pendingHardStop < minInitialRisk
-            pendingHardStop := pendingFillPrice - minInitialRisk
-        else if pendingOrderSide == ENTRY_SHORT and pendingHardStop > pendingFillPrice and pendingHardStop - pendingFillPrice < minInitialRisk
-            pendingHardStop := pendingFillPrice + minInitialRisk
+    // Bot 2: 1R tối thiểu tính từ giá khớp thực tế; mốc = max(giá, hệ số × ATR nến tín hiệu).
+    float atrMult = timeframe.period == "15" ? minInitialRiskAtr : 0.0
+    float minRisk = atrMult > 0.0 and not na(atrValue[1]) ? math.max(minInitialRisk, atrMult * atrValue[1]) : minInitialRisk
+    if minRisk > 0.0
+        if pendingOrderSide == ENTRY_LONG and pendingHardStop < pendingFillPrice and pendingFillPrice - pendingHardStop < minRisk
+            pendingHardStop := pendingFillPrice - minRisk
+        else if pendingOrderSide == ENTRY_SHORT and pendingHardStop > pendingFillPrice and pendingHardStop - pendingFillPrice < minRisk
+            pendingHardStop := pendingFillPrice + minRisk
     float filledRiskDistance = math.abs(pendingFillPrice - pendingHardStop)
     float filledTakeProfit = pendingOrderSide == ENTRY_LONG ? pendingFillPrice + TAKE_PROFIT_R_MULTIPLE * filledRiskDistance : pendingFillPrice - TAKE_PROFIT_R_MULTIPLE * filledRiskDistance
     array.push(tradeEntryIds, pendingEntryId)

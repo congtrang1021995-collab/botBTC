@@ -37,6 +37,9 @@
 > khớp lệnh mà giá khớp cách hard stop nhỏ hơn mốc thì nới stop ra đúng mốc; TP 10R và
 > trailing tính theo 1R mới. Khối lượng vẫn cố định, không đổi theo 1R (mục 25).
 >
+> Cập nhật 2026-09-29 — **Step 4**: khung **M15** mốc 1R tối thiểu = **max(10 giá, 4 × ATR13 nến
+> tín hiệu)**; khung khác giữ 10 giá (mục 25).
+>
 > Cập nhật 2026-09-29 — **Step 1 v1.8**: **bỏ điều kiện độ dốc EMA34 13 nến** (mặc định
 > `use_confirm_slope = false`, Pine input `Dùng điều kiện độ dốc n2` tắt). Trend quay về rule
 > cũ v1.5 với `k = 5`: duy trì chỉ cần `EMA34 >= EMA89` (mục 4.1, 8.1). Lý do: backtest MT5
@@ -746,6 +749,16 @@ trailing (mục 25.1). Nếu giá khớp đã vượt qua stop (gap) thì giữ 
 cũ (`INVALID_ENTRY_RISK`). Khối lượng vẫn theo Step 5, không đổi theo độ lớn 1R.
 Lý do: trên XAU các stop quá sát (1R vài giá) bị quét sớm và lãi bằng tiền không đáng kể;
 backtest XAUUSDT Futures (12/2025→09/2026) mốc 10 tốt hơn 5/15/20 ở cả H1 và 15p.
+
+**Bot 2 (2026-09-29) — mốc 1R tối thiểu theo ATR.** `Min Initial Risk` thực tế =
+`max(min_initial_risk, min_initial_risk_atr_multiplier × ATR)` với ATR(13) của **nến tín
+hiệu** (đã đóng trước lúc khớp, không gồm nến khớp). Hệ số theo khung: **M15 = 4**, khung khác
+= 0 (chỉ mốc giá) — `MIN_RISK_ATR_MULTIPLIER_BY_MINUTES` / `config_for_timeframe`, Pine `1R tối
+thiểu theo ATR` chỉ áp trên chart 15 phút. H1 (2025-01→2026-09) hệ số 1–4 đều kém mốc 10
+(4×ATR: +$8.8k vs +$13.3k). Lý do: mốc 10 cố định mất tác dụng khi biến động
+tăng (XAU M15: 85% lệnh chạm mốc năm 2022, 5% năm 2026). Backtest MT5 XAUUSD M15
+2022-06→2026-09, rủi ro $200/lệnh: mốc 10 +$46.2k / PF 1.39 / max DD $3.4k; max(10, 4×ATR)
++$44.1k / PF 1.48 / max DD $3.2k; chỉ k×ATR hoặc min(10, k×ATR) kém hơn (DD $4.6k–8.1k).
 
 ### 25.1. Trailing stop theo R
 

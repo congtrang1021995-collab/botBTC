@@ -46,7 +46,7 @@ def main() -> None:
         print("!! Nút Algo Trading trong MT5 đang TẮT: lệnh sẽ bị từ chối. Bấm nút "
               "'Algo Trading' trên thanh công cụ MT5 (chuyển sang xanh).")
 
-    prefix = OUT_DIR / f"{args.symbol}"
+    prefix = OUT_DIR / f"{broker.symbol}"  # tên mã thực của sàn (Exness: XAUUSDm)
     traders = [
         LiveTrader(
             broker, tf, volume=args.volume, warmup_bars=args.warmup, dry_run=args.dry_run,
@@ -58,7 +58,7 @@ def main() -> None:
     ]
     mode = "DRY-RUN (không gửi lệnh)" if args.dry_run else "ĐẶT LỆNH THẬT"
     filters = ", ".join(f"{t.timeframe}<-{t.higher_timeframe}" for t in traders if t.higher_timeframe)
-    print(f"{args.symbol} {' + '.join(args.tf)} | {args.volume} lot/lệnh | {mode}"
+    print(f"{broker.symbol} {' + '.join(args.tf)} | {args.volume} lot/lệnh | {mode}"
           f" | lọc trend khung lớn: {filters or 'tắt'}")
 
     if args.check:

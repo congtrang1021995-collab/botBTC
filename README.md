@@ -71,6 +71,14 @@ và `python -m pip install MetaTrader5 pandas`. Tải nến ra CSV (giờ đổi
 python exness_mt5_fetch.py XAUUSD --tf H1 --start 2025-01-01
 ```
 
+Tên mã tự khớp theo sàn: gõ `XAUUSD` mà sàn chỉ có `XAUUSDm` (Exness Standard) thì bot, feed và
+lệnh tải nến tự dùng `XAUUSDm` (mã ngắn nhất bắt đầu bằng tên đã gõ; bỏ qua `XAUUSD247m`). Dữ liệu
+Exness Real (lịch sử XAUUSDm từ 2018, giờ server UTC+0) tải vào `data/exness/`:
+
+```bash
+python exness_mt5_fetch.py XAUUSD --tf M15 --start 2021-01-01 --out-dir data/exness
+```
+
 Bot tự giao dịch: bấm đúp `mt5_bot.bat` (XAUUSD, H1 + M15, 0.1 lot) hoặc chạy lệnh dưới.
 Nút **Algo Trading** trong MT5 phải bật. Mỗi nến đóng, engine Bot2 chạy giống backtest và
 lệnh MT5 đi theo engine: có lệnh chờ thì vào market ngay đầu nến kế tiếp kèm SL (1R tối
@@ -121,6 +129,11 @@ Bot2 chạy trong trình duyệt, sau đó lưu IndexedDB.
 - 2026-09-28 — Step 4: **1R tối thiểu 10 giá** (`min_initial_risk=10`, Pine `1R tối thiểu`).
   Giá khớp cách hard stop dưới 10 thì nới stop ra đúng 10; TP 10R và trailing theo 1R mới.
   Khối lượng vẫn cố định (không đổi theo 1R). Đặt `0` để tắt.
+- 2026-09-29 — Step 4: khung **M15** mốc 1R tối thiểu = **max(10 giá, 4 × ATR13 của nến tín hiệu)**;
+  khung khác giữ 10 giá (`MIN_RISK_ATR_MULTIPLIER_BY_MINUTES = {15: 4}` trong `config.py`, Pine
+  `1R tối thiểu theo ATR` chỉ áp chart 15 phút). H1 thử 1–4×ATR đều kém mốc 10.
+  Backtest MT5 XAUUSD M15 4 năm, rủi ro $200/lệnh: PF 1.39 -> 1.48, max DD $3.4k -> $3.2k,
+  lãi +$46.2k -> +$44.1k. Áp dụng cả engine, backtest, chart và bot MT5.
 - 2026-09-29 — Step 1 v1.8: **bỏ điều kiện độ dốc EMA34 13 nến** (`use_confirm_slope=False`
   mặc định, Pine `Dùng điều kiện độ dốc n2` tắt). Trend quay về rule cũ với `k=5`. Backtest
   MT5 XAUUSD 2025-01→2026-09: H1 +33.4R → +58.6R, M15 +24.6R → +78.3R; điều kiện này chỉ
@@ -160,7 +173,8 @@ trực quan trên TradingView.
 - Step 4 — Invalidation: đã triển khai hard stop. **Bot 2 đóng lệnh tại Close khi trend
   đảo chiều** (`exit_on_trend_reversal=True`); trend về SIDEWAY không đóng lệnh
   (`exit_on_trend_loss=False` mặc định, bật để đóng như bot gốc).
-  **Bot 2:** 1R tối thiểu 10 giá — stop sát hơn được nới ra khi khớp lệnh (`min_initial_risk`).
+  **Bot 2:** 1R tối thiểu 10 giá (M15: max(10, 4×ATR nến tín hiệu)) — stop sát hơn được nới ra khi khớp lệnh
+  (`min_initial_risk`, `min_initial_risk_atr_multiplier`).
   Rule thoát riêng khi Close phá Protected Swing đã đóng băng hiện tạm thời bị vô
   hiệu hóa. Stop được dời theo lợi nhuận: vượt 1R về Entry, vượt 2R lên +1R,
   vượt 3R lên +2R, ... vượt 9R lên +8R (Bot 2, 2026-09-28: vượt nR -> +(n-1)R,

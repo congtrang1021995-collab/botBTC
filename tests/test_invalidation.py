@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from trading_bot.config import StrategyConfig
+from trading_bot.config import StrategyConfig, config_for_timeframe
 from trading_bot.core.models import (
     PendingEntry,
     PositionSide,
@@ -12,7 +12,11 @@ from trading_bot.core.models import (
     StrategyState,
     TrendState,
 )
-from trading_bot.strategy.invalidation import apply_minimum_risk, evaluate_invalidation
+from trading_bot.strategy.invalidation import (
+    apply_minimum_risk,
+    evaluate_invalidation,
+    minimum_initial_risk,
+)
 from tests.helpers import make_context
 
 
@@ -32,6 +36,21 @@ class InvalidationTests(unittest.TestCase):
         self.assertEqual(StrategyConfig().min_initial_risk, 10.0)
         with self.assertRaises(ValueError):
             StrategyConfig(min_initial_risk=-1.0)
+
+    def test_minimum_initial_risk_is_max_of_price_floor_and_atr_multiple(self) -> None:
+        self.assertEqual(StrategyConfig().min_initial_risk_atr_multiplier, 0.0)
+        config = config_for_timeframe(None, 15)
+        self.assertEqual(config.min_initial_risk_atr_multiplier, 4.0)
+        self.assertEqual(config_for_timeframe(None, 60).min_initial_risk_atr_multiplier, 0.0)
+        custom = StrategyConfig(min_initial_risk_atr_multiplier=2.0)
+        self.assertEqual(config_for_timeframe(custom, 15).min_initial_risk_atr_multiplier, 2.0)
+        self.assertAlmostEqual(minimum_initial_risk(config, 2.0), 10.0)
+        self.assertAlmostEqual(minimum_initial_risk(config, 9.6), 38.4)
+        self.assertAlmostEqual(minimum_initial_risk(config, None), 10.0)
+        off = StrategyConfig(min_initial_risk_atr_multiplier=0.0)
+        self.assertAlmostEqual(minimum_initial_risk(off, 9.6), 10.0)
+        with self.assertRaises(ValueError):
+            StrategyConfig(min_initial_risk_atr_multiplier=-1.0)
 
     def test_minimum_risk_widens_only_tight_stops(self) -> None:
         long_, short = PositionSide.LONG, PositionSide.SHORT

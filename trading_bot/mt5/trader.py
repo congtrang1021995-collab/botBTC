@@ -26,13 +26,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
-from trading_bot.config import StrategyConfig
+from trading_bot.config import StrategyConfig, config_for_timeframe
 from trading_bot.core.engine import ProcessResult, TradingEngine
 from trading_bot.core.higher_tf import HigherTrendFeed
 from trading_bot.core.models import Bar, PendingEntry, PositionSide, PositionState
 from trading_bot.mt5.broker import BrokerPosition, OrderResult, RawBar, TIMEFRAME_MINUTES
 from trading_bot.strategy.exit import calculate_take_profit_price
-from trading_bot.strategy.invalidation import apply_minimum_risk
+from trading_bot.strategy.invalidation import apply_minimum_risk, minimum_initial_risk
 
 SETUP_SHORT = {"BREAKOUT_LONG": "BOL", "BREAKOUT_SHORT": "BOS",
                "VALUE_ZONE_LONG": "VZL", "VALUE_ZONE_SHORT": "VZS"}
@@ -82,7 +82,7 @@ class LiveTrader:
 
     def __post_init__(self) -> None:
         self.magic = magic_for(self.timeframe)
-        self.engine = TradingEngine(self.config)
+        self.engine = TradingEngine(config_for_timeframe(self.config, TIMEFRAME_MINUTES[self.timeframe]))
         if self.higher_timeframe:
             self.higher = HigherTrendFeed(TIMEFRAME_MINUTES[self.higher_timeframe], self.config)
         self._load_state()
@@ -254,7 +254,9 @@ class LiveTrader:
         bid, ask = self.broker.bid_ask()
         price = ask if side == PositionSide.LONG else bid
         cfg = self.engine.config
-        sl = apply_minimum_risk(side, price, pending.hard_stop_price, cfg.min_initial_risk)
+        # engine vừa xử lý nến tín hiệu -> ATR hiện tại là của nến đã đóng trước lúc khớp
+        min_risk = minimum_initial_risk(cfg, self.engine.state.market.indicators.atr)
+        sl = apply_minimum_risk(side, price, pending.hard_stop_price, min_risk)
         try:
             tp = calculate_take_profit_price(side, price, sl, cfg.take_profit_r_multiple)
         except ValueError:

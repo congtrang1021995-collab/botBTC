@@ -44,6 +44,15 @@ class OrderResult:
     message: str = ""
 
 
+def resolve_symbol(mt5, symbol: str) -> str:
+    """Tên mã theo sàn: có đúng tên thì dùng, không thì lấy mã ngắn nhất bắt đầu bằng tên đó
+    (Exness Standard: XAUUSD -> XAUUSDm, bỏ qua XAUUSD247m)."""
+    if mt5.symbol_info(symbol) is not None:
+        return symbol
+    names = sorted((s.name for s in mt5.symbols_get(f"{symbol}*") or ()), key=lambda n: (len(n), n))
+    return names[0] if names else symbol
+
+
 class Mt5Broker:
     def __init__(self, symbol: str, server_tz: str = "auto", deviation: int = 20) -> None:
         import MetaTrader5 as mt5
@@ -51,6 +60,7 @@ class Mt5Broker:
         self.mt5 = mt5
         if not mt5.initialize():
             raise RuntimeError(f"Không kết nối được MT5: {mt5.last_error()}")
+        symbol = resolve_symbol(mt5, symbol)
         info = mt5.symbol_info(symbol)
         if info is None or not mt5.symbol_select(symbol, True):
             raise RuntimeError(f"MT5 không có mã {symbol}")

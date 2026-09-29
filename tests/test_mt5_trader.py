@@ -16,7 +16,7 @@ from trading_bot.core.models import (
     SetupType,
     StrategyState,
 )
-from trading_bot.mt5.broker import BrokerPosition, OrderResult, RawBar
+from trading_bot.mt5.broker import resolve_symbol, BrokerPosition, OrderResult, RawBar
 from trading_bot.mt5.trader import LiveTrader
 
 T0 = datetime(2026, 9, 29, 0, 0, tzinfo=timezone.utc)
@@ -72,10 +72,12 @@ class StubEngine:
         self.config = StrategyConfig()
         self.strategy = StrategyState()
         self.processed = 0
+        self.atr = None
 
     @property
     def state(self):
-        return SimpleNamespace(strategy=self.strategy)
+        return SimpleNamespace(strategy=self.strategy,
+                               market=SimpleNamespace(indicators=SimpleNamespace(atr=self.atr)))
 
     def process_bar(self, bar):
         self.processed += 1
@@ -116,6 +118,14 @@ class LiveTraderTests(unittest.TestCase):
         # Giá khớp 100.2, stop 97 -> 1R = 3.2 < 10 -> nới stop về 90.2, TP = 100.2 + 100.
         self.assertEqual(self.broker.calls, [("open", "LONG", 0.1, 90.2, 200.2)])
         self.assertIsNone(trader.tickets[1]["key"])
+
+    def test_min_risk_widens_to_atr_multiple(self) -> None:
+        # ATR nến tín hiệu 5 -> mốc = max(10, 4 x 5) = 20 -> stop 80.2, TP = 100.2 + 200.
+        self.engine.config = StrategyConfig(min_initial_risk_atr_multiplier=4.0)
+        self.engine.atr = 5.0
+        self.engine.strategy = StrategyState(pending_entry=pending(2, stop=97.0))
+        make_trader(self.broker, self.engine, self.now).start()
+        self.assertEqual(self.broker.calls, [("open", "LONG", 0.1, 80.2, 300.2)])
 
     def test_late_signal_is_skipped(self) -> None:
         self.engine.strategy = StrategyState(pending_entry=pending(2, stop=80.0))
@@ -242,3 +252,16 @@ class HigherTimeframeTraderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResolveSymbolTests(unittest.TestCase):
+    def test_suffix_symbol_of_broker_is_found(self) -> None:
+        names = ["XAUUSD247m", "XAUUSDm", "XAUEURm"]
+        fake = SimpleNamespace(
+            symbol_info=lambda n: object() if n in names else None,
+            symbols_get=lambda pattern: [SimpleNamespace(name=n) for n in names
+                                         if n.startswith(pattern.rstrip("*"))],
+        )
+        self.assertEqual(resolve_symbol(fake, "XAUUSD"), "XAUUSDm")
+        self.assertEqual(resolve_symbol(fake, "XAUUSDm"), "XAUUSDm")
+        self.assertEqual(resolve_symbol(fake, "BTCUSD"), "BTCUSD")

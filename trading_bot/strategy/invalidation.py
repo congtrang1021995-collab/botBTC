@@ -156,6 +156,13 @@ def evaluate_invalidation(
     )
 
 
+def minimum_initial_risk(config: StrategyConfig, atr: float | None) -> float:
+    """Bot 2: 1R tối thiểu = max(mốc giá, hệ số × ATR nến đã đóng trước lúc khớp)."""
+    if atr is None or config.min_initial_risk_atr_multiplier <= 0.0:
+        return config.min_initial_risk
+    return max(config.min_initial_risk, config.min_initial_risk_atr_multiplier * atr)
+
+
 def apply_minimum_risk(
     side: PositionSide,
     entry_price: float,

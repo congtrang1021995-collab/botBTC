@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +49,10 @@ class StrategyConfig:
     # giá khớp -> hard stop nhỏ hơn mốc thì nới stop ra đủ mốc (TP/trailing tính
     # theo 1R mới). 0 = tắt. Đo trên XAU (1R trung vị ~45 giá); BTC hầu như không chạm.
     min_initial_risk: float = 10.0
+    # Bot 2 (2026-09-29): 1R tối thiểu = max(min_initial_risk, hệ số × ATR) với ATR của
+    # nến đã đóng trước lúc khớp. 0 = chỉ dùng mốc giá. Hệ số mặc định theo khung nằm ở
+    # MIN_RISK_ATR_MULTIPLIER_BY_MINUTES (áp qua config_for_timeframe).
+    min_initial_risk_atr_multiplier: float = 0.0
     minimum_tick: float = 0.01
     fixed_position_size: float = 1.0
     # Bot 2 (2026-09-28): TP nâng từ 5R lên 10R.
@@ -89,6 +93,8 @@ class StrategyConfig:
             raise ValueError("stop_atr_multiplier must be >= 0")
         if self.min_initial_risk < 0.0:
             raise ValueError("min_initial_risk must be >= 0")
+        if self.min_initial_risk_atr_multiplier < 0.0:
+            raise ValueError("min_initial_risk_atr_multiplier must be >= 0")
         if self.minimum_tick <= 0.0:
             raise ValueError("minimum_tick must be > 0")
         if self.fixed_position_size <= 0.0:
@@ -109,3 +115,19 @@ class StrategyConfig:
             raise ValueError("maximum_quantity must be >= 0")
         if 0.0 < self.maximum_quantity < self.minimum_quantity:
             raise ValueError("maximum_quantity must be >= minimum_quantity")
+
+
+# Bot 2 (2026-09-29): hệ số ATR của 1R tối thiểu theo khung (phút). Chỉ M15 có lợi:
+# backtest MT5 XAUUSD M15 2022-06→2026-09, rủi ro $200/lệnh, max(10, 4×ATR) giữ lãi ~ như
+# mốc 10 (+$44.1k vs +$46.2k), PF 1.39 -> 1.48, max DD $3.4k -> $3.2k. H1 (2025-01→2026-09)
+# mọi hệ số 1–4 đều kém mốc 10 (4×ATR: +$8.8k vs +$13.3k) nên H1 giữ mốc giá.
+MIN_RISK_ATR_MULTIPLIER_BY_MINUTES: dict[int, float] = {15: 4.0}
+
+
+def config_for_timeframe(config: StrategyConfig | None, minutes: int | None) -> StrategyConfig:
+    """Gắn tham số mặc định theo khung. Hệ số ATR đã đặt khác 0 trong config thì giữ nguyên."""
+    config = config or StrategyConfig()
+    multiplier = MIN_RISK_ATR_MULTIPLIER_BY_MINUTES.get(minutes) if minutes else None
+    if multiplier is None or config.min_initial_risk_atr_multiplier > 0.0:
+        return config
+    return replace(config, min_initial_risk_atr_multiplier=multiplier)
